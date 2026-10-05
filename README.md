@@ -38,9 +38,10 @@ notifications show its name and icon.
 
 ## Develop
 
-Recipes use [just](https://github.com/casey/just):
+Recipes use [just](https://github.com/casey/just); tests run with
+[cargo-nextest](https://nexte.st) (`cargo install cargo-nextest --locked`):
 
-    just test     # cargo test
+    just test     # cargo nextest run
     just lint     # clippy, warnings are errors
     just once     # run --once from source
     just build    # release build

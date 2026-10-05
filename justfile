@@ -8,9 +8,9 @@ default:
 build:
     cargo build --release
 
-# Run the test suite
+# Run the test suite (cargo-nextest)
 test:
-    cargo test
+    cargo nextest run
 
 # Clippy on all targets, warnings are errors
 lint:
