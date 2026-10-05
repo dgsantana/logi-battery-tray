@@ -60,6 +60,15 @@ pub fn request(dev: u8, feat_idx: u8, func: u8, params: &[u8]) -> [u8; SHORT_LEN
     buf
 }
 
+/// Build a long request, for links that only accept long reports (BLE).
+pub fn request_long(dev: u8, feat_idx: u8, func: u8, params: &[u8]) -> [u8; LONG_LEN] {
+    assert!(params.len() <= LONG_LEN - 4, "too many params for long report");
+    let mut buf = [0; LONG_LEN];
+    buf[..4].copy_from_slice(&[REPORT_LONG, dev, feat_idx, (func << 4) | SWID]);
+    buf[4..4 + params.len()].copy_from_slice(params);
+    buf
+}
+
 pub fn parse(buf: &[u8]) -> Option<Message> {
     let len = match *buf.first()? {
         REPORT_SHORT => SHORT_LEN,
@@ -133,6 +142,14 @@ mod tests {
     fn request_encodes_short_report_with_swid() {
         assert_eq!(request(2, 0, 0, &[0x10, 0x04]), [0x10, 0x02, 0x00, 0x0A, 0x10, 0x04, 0x00]);
         assert_eq!(request(4, 8, 1, &[]), [0x10, 0x04, 0x08, 0x1A, 0, 0, 0]);
+    }
+
+    #[test]
+    fn request_long_encodes_long_report_with_swid() {
+        let req = request_long(0xFF, 0x02, 1, &[0x05]);
+        assert_eq!(req.len(), LONG_LEN);
+        assert_eq!(req[..5], [0x11, 0xFF, 0x02, 0x1A, 0x05]);
+        assert!(req[5..].iter().all(|&b| b == 0));
     }
 
     #[test]

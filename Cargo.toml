@@ -8,9 +8,15 @@ repository = "https://github.com/dgsantana/logi-battery-tray"
 [dependencies]
 env_logger = "0.11.11"
 ksni = { version = "0.3.6", features = ["blocking"] }
-libc = "0.2"
 log = "0.4.34"
 notify-rust = "4.18.1"
+
+[target.'cfg(target_os = "linux")'.dependencies]
+hidapi = { version = "2.6.7", default-features = false, features = ["linux-native-basic-udev"] }
+libc = "0.2"
+
+[target.'cfg(windows)'.dependencies]
+hidapi = { version = "2.6.7", default-features = false, features = ["windows-native"] }
 
 [profile.release]
 lto = "fat"

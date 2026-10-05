@@ -1,6 +1,6 @@
 mod hidpp;
-mod receiver;
 mod state;
+mod transport;
 mod tray;
 
 use std::collections::HashMap;
@@ -9,11 +9,12 @@ use std::process::ExitCode;
 use std::sync::mpsc::{self, RecvTimeoutError, TryRecvError};
 use std::time::{Duration, Instant};
 
+use hidapi::HidApi;
 use ksni::blocking::TrayMethods;
 use log::{debug, error, info, warn};
 
 use crate::hidpp::Message;
-use crate::receiver::{ReqError, Receiver, DEVICE_INDEXES};
+use crate::transport::{ReqError, Transport};
 use crate::state::{Alert, State};
 use crate::tray::{BatteryTray, Cmd};
 
@@ -51,20 +52,20 @@ fn main() -> ExitCode {
 
 /// Print every device's battery once and exit.
 fn run_once() -> ExitCode {
-    let Some(path) = receiver::find() else {
-        eprintln!("Receiver not found");
+    let Some((opened, id)) = open_first() else {
+        eprintln!("No Logitech devices found");
         return ExitCode::FAILURE;
     };
-    let mut rcv = match Receiver::open(&path) {
+    let mut rcv = match opened {
         Ok(rcv) => rcv,
         Err(e) => {
-            eprintln!("cannot open {}: {e}", path.display());
+            eprintln!("cannot open {id}: {e}");
             return ExitCode::FAILURE;
         }
     };
     let mut state = State::default();
     let mut battery_idx = HashMap::new();
-    for dev in DEVICE_INDEXES {
+    for &dev in rcv.indexes() {
         if let Err(e) = probe(&mut rcv, &mut state, &mut battery_idx, dev) {
             eprintln!("receiver I/O error: {e}");
             return ExitCode::FAILURE;
@@ -78,15 +79,14 @@ fn run_once() -> ExitCode {
 fn run(cmds: &mpsc::Receiver<Cmd>, publish: impl Fn(&State, bool)) {
     let mut state = State::default();
     loop {
-        let opened = receiver::find().map(|path| (Receiver::open(&path), path));
-        let mut rcv = match opened {
-            Some((Ok(rcv), path)) => {
-                info!("using receiver at {}", path.display());
-                state.set_present(&path.display().to_string(), true);
+        let mut rcv = match open_first() {
+            Some((Ok(rcv), id)) => {
+                info!("using transport {id}");
+                state.set_present(&id, true);
                 rcv
             }
-            Some((Err(e), path)) => {
-                warn!("cannot open {}: {e}", path.display());
+            Some((Err(e), id)) => {
+                warn!("cannot open {id}: {e}");
                 publish(&state, false);
                 if wait_for_retry(cmds) { return } else { continue }
             }
@@ -107,6 +107,19 @@ fn run(cmds: &mpsc::Receiver<Cmd>, publish: impl Fn(&State, bool)) {
     }
 }
 
+/// Open the first transport found, with its id.
+fn open_first() -> Option<(io::Result<Transport>, String)> {
+    let api = match HidApi::new() {
+        Ok(api) => api,
+        Err(e) => {
+            warn!("cannot enumerate HID devices: {e}");
+            return None;
+        }
+    };
+    let candidate = transport::discover(&api).into_iter().next()?;
+    Some((Transport::open(&api, &candidate), candidate.id))
+}
+
 /// Sleep until rediscovery is due. Returns true on Quit.
 fn wait_for_retry(cmds: &mpsc::Receiver<Cmd>) -> bool {
     match cmds.recv_timeout(REDISCOVER_INTERVAL) {
@@ -117,7 +130,7 @@ fn wait_for_retry(cmds: &mpsc::Receiver<Cmd>) -> bool {
 
 /// Follow one open receiver. `Ok` means Quit was requested; `Err` means the receiver is gone.
 fn track(
-    rcv: &mut Receiver,
+    rcv: &mut Transport,
     state: &mut State,
     cmds: &mpsc::Receiver<Cmd>,
     publish: &impl Fn(&State, bool),
@@ -132,7 +145,7 @@ fn track(
             Err(TryRecvError::Empty) => {}
         }
         if Instant::now() >= next_poll {
-            for dev in DEVICE_INDEXES {
+            for &dev in rcv.indexes() {
                 refresh(rcv, state, &mut battery_idx, dev)?;
             }
             publish(state, true);
@@ -162,7 +175,7 @@ fn track(
 }
 
 /// Re-read a known device's battery, or probe it from scratch.
-fn refresh(rcv: &mut Receiver, state: &mut State, battery_idx: &mut HashMap<u8, u8>, dev: u8) -> io::Result<()> {
+fn refresh(rcv: &mut Transport, state: &mut State, battery_idx: &mut HashMap<u8, u8>, dev: u8) -> io::Result<()> {
     let Some(&idx) = battery_idx.get(&dev) else {
         return probe(rcv, state, battery_idx, dev).map(drop);
     };
@@ -180,7 +193,7 @@ fn refresh(rcv: &mut Receiver, state: &mut State, battery_idx: &mut HashMap<u8, 
 
 /// Query a device's name, kind and battery; unreachable devices are marked offline.
 /// Returns whether the device answered.
-fn probe(rcv: &mut Receiver, state: &mut State, battery_idx: &mut HashMap<u8, u8>, dev: u8) -> io::Result<bool> {
+fn probe(rcv: &mut Transport, state: &mut State, battery_idx: &mut HashMap<u8, u8>, dev: u8) -> io::Result<bool> {
     match rcv.probe_device(dev) {
         Ok(found) => {
             debug!("dev {dev}: {:?}", found.device);
