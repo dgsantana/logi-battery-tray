@@ -45,10 +45,11 @@ impl State {
         entry.evaluate()
     }
 
-    /// New battery reading for a known device (e.g. from an event).
+    /// New battery reading for a known device (e.g. from an event); marks it online.
     pub fn set_battery(&mut self, index: u8, battery: BatteryStatus) -> Vec<Alert> {
         let Some(entry) = self.entries.get_mut(&index) else { return Vec::new() };
         entry.device.battery = Some(battery);
+        entry.device.online = true;
         entry.evaluate()
     }
 
@@ -184,6 +185,15 @@ mod tests {
         s.upsert(dev(2, 30));
         assert!(s.set_battery(2, batt(10, Charging::Charging)).is_empty());
         assert!(s.set_battery(2, batt(4, Charging::Full)).is_empty());
+    }
+
+    #[test]
+    fn battery_reading_brings_device_online() {
+        let mut s = State::default();
+        s.upsert(dev(2, 40));
+        s.set_online(2, false);
+        s.set_battery(2, batt(39, Charging::Discharging));
+        assert!(s.snapshot()[0].online);
     }
 
     #[test]

@@ -90,7 +90,7 @@ impl ksni::Tray for BatteryTray {
     }
 
     fn menu(&self) -> Vec<MenuItem<Self>> {
-        let mut items: Vec<MenuItem<Self>> = if self.devices.is_empty() {
+        let mut items: Vec<MenuItem<Self>> = if self.devices.is_empty() || !self.receiver_present {
             vec![StandardItem {
                 label: summary(&self.devices, self.receiver_present),
                 enabled: false,
@@ -184,6 +184,31 @@ mod tests {
         assert_eq!(device_line(&dev("MX Keys S", batt(100, Charging::Discharging), false)), "MX Keys S — offline (last 100%)");
         assert_eq!(device_line(&dev("M", None, false)), "M — offline");
         assert_eq!(device_line(&dev("M", None, true)), "M — battery unknown");
+    }
+
+    fn menu_labels(tray: &BatteryTray) -> Vec<String> {
+        use ksni::Tray;
+        tray.menu()
+            .into_iter()
+            .filter_map(|i| match i {
+                MenuItem::Standard(s) => Some(s.label),
+                _ => None,
+            })
+            .collect()
+    }
+
+    #[test]
+    fn menu_hides_stale_devices_without_receiver() {
+        let (tx, _rx) = std::sync::mpsc::channel();
+        let mut tray = BatteryTray {
+            devices: vec![dev("A", batt(50, Charging::Discharging), true)],
+            lowest: batt(50, Charging::Discharging),
+            receiver_present: true,
+            tx,
+        };
+        assert_eq!(menu_labels(&tray), ["A — 50%", "Refresh", "Quit"]);
+        tray.receiver_present = false;
+        assert_eq!(menu_labels(&tray), ["Receiver not found", "Refresh", "Quit"]);
     }
 
     #[test]

@@ -162,10 +162,7 @@ fn refresh(rcv: &mut Receiver, state: &mut State, battery_idx: &mut HashMap<u8, 
         return probe(rcv, state, battery_idx, dev);
     };
     match rcv.read_battery(dev, idx) {
-        Ok(battery) => {
-            state.set_online(dev, true);
-            notify(state.set_battery(dev, battery));
-        }
+        Ok(battery) => notify(state.set_battery(dev, battery)),
         Err(ReqError::Io(e)) => return Err(e),
         Err(e) => {
             debug!("dev {dev} unreachable: {e}");
