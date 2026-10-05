@@ -4,11 +4,12 @@ use std::process::ExitCode;
 use std::sync::mpsc::Sender;
 
 use ksni::blocking::TrayMethods;
-use ksni::menu::{MenuItem, StandardItem};
+use ksni::menu::{CheckmarkItem, MenuItem, StandardItem};
 use ksni::{Category, ToolTip};
 use log::{error, info, warn};
 
 use super::Publisher;
+use crate::autostart;
 use crate::hidpp::{BatteryStatus, DeviceKind};
 use crate::state::{Alert, Device};
 use crate::tray::{self, device_line, icon_for, summary, Cmd, TITLE};
@@ -74,6 +75,20 @@ impl ksni::Tray for BatteryTray {
                 .collect()
         };
         items.push(MenuItem::Separator);
+        items.push(
+            CheckmarkItem {
+                label: "Start at login".into(),
+                checked: autostart::is_enabled(),
+                activate: Box::new(|_: &mut Self| {
+                    let on = !autostart::is_enabled();
+                    if let Err(e) = autostart::set_enabled(on) {
+                        warn!("cannot change start at login: {e}");
+                    }
+                }),
+                ..Default::default()
+            }
+            .into(),
+        );
         items.push(
             StandardItem {
                 label: "Refresh".into(),
@@ -163,6 +178,7 @@ mod tests {
             .into_iter()
             .filter_map(|i| match i {
                 MenuItem::Standard(s) => Some(s.label),
+                MenuItem::Checkmark(c) => Some(c.label),
                 _ => None,
             })
             .collect()
@@ -177,8 +193,8 @@ mod tests {
             present: true,
             tx,
         };
-        assert_eq!(menu_labels(&tray), ["A — 50%", "Refresh", "Quit"]);
+        assert_eq!(menu_labels(&tray), ["A — 50%", "Start at login", "Refresh", "Quit"]);
         tray.present = false;
-        assert_eq!(menu_labels(&tray), ["No Logitech devices found", "Refresh", "Quit"]);
+        assert_eq!(menu_labels(&tray), ["No Logitech devices found", "Start at login", "Refresh", "Quit"]);
     }
 }

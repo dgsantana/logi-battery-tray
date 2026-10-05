@@ -10,6 +10,7 @@ widget never see these devices.
 - Notification when a discharging device drops to 15% and again at 5%.
 - Live updates from device battery events, plus a re-poll every 5 minutes.
 - Only one instance runs; starting it again does nothing.
+- "Start at login" in the tray menu turns autostart on or off.
 
 Talks HID++ 2.0 directly over HID (no Solaar or Logi Options+ needed; don't run
 them at the same time). On Linux, access comes from the logind `uaccess` ACL on

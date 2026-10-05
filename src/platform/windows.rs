@@ -9,7 +9,7 @@ use std::sync::mpsc::{self, Sender};
 use std::thread;
 
 use log::{error, info, warn};
-use tray_icon::menu::{Menu, MenuEvent, MenuId, MenuItem, PredefinedMenuItem};
+use tray_icon::menu::{CheckMenuItem, Menu, MenuEvent, MenuId, MenuItem, PredefinedMenuItem};
 use tray_icon::{Icon, TrayIcon, TrayIconBuilder, TrayIconEvent};
 use windows_sys::Win32::System::Console::{ATTACH_PARENT_PROCESS, AttachConsole};
 use windows_sys::Win32::UI::WindowsAndMessaging::{
@@ -17,6 +17,7 @@ use windows_sys::Win32::UI::WindowsAndMessaging::{
 };
 
 use super::Publisher;
+use crate::autostart;
 use crate::icon;
 use crate::state::Alert;
 use crate::tray::{Cmd, Snapshot, TITLE, device_line, summary};
@@ -45,6 +46,7 @@ pub fn attach_console() {
 /// Fixed menu ids, so a click survives the menu being rebuilt.
 const MENU_REFRESH: &str = "refresh";
 const MENU_QUIT: &str = "quit";
+const MENU_AUTOSTART: &str = "autostart";
 
 struct Ui {
     tray: TrayIcon,
@@ -80,7 +82,7 @@ fn command(id: &MenuId) -> Option<Cmd> {
     }
 }
 
-/// Device lines (disabled), then Refresh and Quit.
+/// Device lines (disabled), then Start at login, Refresh and Quit.
 fn build_menu(snap: &Snapshot) -> Menu {
     let menu = Menu::new();
     let lines: Vec<String> = if snap.devices.is_empty() || !snap.present {
@@ -88,12 +90,14 @@ fn build_menu(snap: &Snapshot) -> Menu {
     } else {
         snap.devices.iter().map(device_line).collect()
     };
+    let login = CheckMenuItem::with_id(MENU_AUTOSTART, "Start at login", true, autostart::is_enabled(), None);
     let refresh = MenuItem::with_id(MENU_REFRESH, "Refresh", true, None);
     let quit = MenuItem::with_id(MENU_QUIT, "Quit", true, None);
     let appended = lines
         .iter()
         .try_for_each(|l| menu.append(&MenuItem::new(l, false, None)))
         .and_then(|()| menu.append(&PredefinedMenuItem::separator()))
+        .and_then(|()| menu.append(&login))
         .and_then(|()| menu.append(&refresh))
         .and_then(|()| menu.append(&quit));
     if let Err(e) = appended {
@@ -117,6 +121,12 @@ fn tooltip(snap: &Snapshot) -> String {
         out.push(c);
     }
     out
+}
+
+fn toggle_autostart() {
+    if let Err(e) = autostart::set_enabled(!autostart::is_enabled()) {
+        warn!("cannot change start at login: {e}");
+    }
 }
 
 /// Pump Win32 messages for up to `PUMP_WAIT_MS`.
@@ -161,7 +171,11 @@ pub fn run(cmd_tx: Sender<Cmd>, worker: Box<dyn FnOnce(Publisher) + Send>) -> Ex
             shown = snap;
         }
         while let Ok(event) = MenuEvent::receiver().try_recv() {
-            if let Some(cmd) = command(&event.id) {
+            if event.id.as_ref() == MENU_AUTOSTART {
+                toggle_autostart();
+                // The check mark flips on click; rebuild from the real state.
+                ui.show(&shown);
+            } else if let Some(cmd) = command(&event.id) {
                 let _ = cmd_tx.send(cmd);
             }
         }
