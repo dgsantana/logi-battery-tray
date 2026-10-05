@@ -58,10 +58,6 @@ impl State {
         }
     }
 
-    pub fn contains(&self, index: u8) -> bool {
-        self.entries.contains_key(&index)
-    }
-
     pub fn snapshot(&self) -> Vec<Device> {
         self.entries.values().map(|e| e.device.clone()).collect()
     }
@@ -126,7 +122,6 @@ mod tests {
         s.upsert(dev(2, 95));
         let idx: Vec<u8> = s.snapshot().iter().map(|d| d.index).collect();
         assert_eq!(idx, [2, 4]);
-        assert!(s.contains(4) && !s.contains(1));
     }
 
     #[test]

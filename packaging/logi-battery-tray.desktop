@@ -1,0 +1,8 @@
+[Desktop Entry]
+Type=Application
+Name=Logitech Battery Tray
+Comment=Battery levels of devices on a Logi Bolt receiver
+Exec=logi-battery-tray
+Icon=input-mouse
+Categories=Utility;
+X-KDE-autostart-phase=2

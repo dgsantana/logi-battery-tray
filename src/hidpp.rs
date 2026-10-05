@@ -8,7 +8,6 @@ pub const LONG_LEN: usize = 20;
 /// Software id stamped on our requests; device-initiated events carry 0.
 pub const SWID: u8 = 0x0A;
 
-pub const FEATURE_ROOT: u16 = 0x0000;
 pub const FEATURE_DEVICE_NAME: u16 = 0x0005;
 pub const FEATURE_UNIFIED_BATTERY: u16 = 0x1004;
 
