@@ -19,6 +19,9 @@ const PRODUCT_BOLT: u16 = 0xC548;
 const USAGE_PAGE_RECEIVER: u16 = 0xFF00;
 /// HID++ vendor usage page on Bluetooth LE devices.
 const USAGE_PAGE_BLE: u16 = 0xFF43;
+/// HID++ collection usages on the vendor page: short (0x10) and long (0x11) reports.
+pub const USAGE_SHORT: u16 = 0x0001;
+pub const USAGE_LONG: u16 = 0x0002;
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(2);
 /// Read slice per handle when a transport has several (Windows collections).
 const READ_SLICE: Duration = Duration::from_millis(10);
@@ -102,29 +105,39 @@ fn strip_collection(s: &str) -> String {
     format!("{}{}", &s[..at], &s[at + 4 + digits..])
 }
 
-/// One transport to open: every HID path of it, in discovery order.
+/// One HID collection of a transport and its usage on the vendor page.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct Candidate {
-    pub id: String,
-    pub kind: Kind,
-    pub paths: Vec<CString>,
+pub struct HidPath {
+    pub path: CString,
+    pub usage: u16,
 }
 
-/// Group HID interfaces `(vendor, product, usage page, path)` into transports.
-pub fn candidates<'a>(infos: impl IntoIterator<Item = (u16, u16, u16, &'a CStr)>) -> Vec<Candidate> {
+/// One transport to open: every HID collection of it, in discovery order.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Candidate {
+    /// Grouped path plus vendor/product, so a reused Linux hidraw path that
+    /// now belongs to another device is a different transport.
+    pub id: String,
+    pub kind: Kind,
+    pub paths: Vec<HidPath>,
+}
+
+/// Group HID interfaces `(vendor, product, usage page, usage, path)` into transports.
+pub fn candidates<'a>(infos: impl IntoIterator<Item = (u16, u16, u16, u16, &'a CStr)>) -> Vec<Candidate> {
     let mut out: Vec<Candidate> = Vec::new();
-    for (vid, pid, page, path) in infos {
+    for (vid, pid, page, usage, path) in infos {
         let Some(kind) = classify(vid, pid, page) else {
             if vid == VENDOR_LOGITECH {
                 debug!("skipping Logitech interface {pid:04x} page {page:04x} at {}", path.to_string_lossy());
             }
             continue;
         };
-        let id = group_key(&path.to_string_lossy());
+        let id = format!("{}|{vid:04x}:{pid:04x}", group_key(&path.to_string_lossy()));
+        let hid_path = HidPath { path: path.into(), usage };
         match out.iter_mut().find(|c| c.id == id) {
-            Some(c) if c.paths.iter().any(|p| p.as_c_str() == path) => {}
-            Some(c) => c.paths.push(path.into()),
-            None => out.push(Candidate { id, kind, paths: vec![path.into()] }),
+            Some(c) if c.paths.iter().any(|p| p.path.as_c_str() == path) => {}
+            Some(c) => c.paths.push(hid_path),
+            None => out.push(Candidate { id, kind, paths: vec![hid_path] }),
         }
     }
     out
@@ -132,7 +145,16 @@ pub fn candidates<'a>(infos: impl IntoIterator<Item = (u16, u16, u16, &'a CStr)>
 
 /// Transports among the HID devices `api` currently knows.
 pub fn discover(api: &HidApi) -> Vec<Candidate> {
-    candidates(api.device_list().map(|d| (d.vendor_id(), d.product_id(), d.usage_page(), d.path())))
+    candidates(api.device_list().map(|d| (d.vendor_id(), d.product_id(), d.usage_page(), d.usage(), d.path())))
+}
+
+/// Order to try handles in for a report of `len` bytes: the collection whose
+/// usage matches the report type first, the rest as a fallback.
+fn write_order(usages: &[u16], len: usize) -> Vec<usize> {
+    let wanted = if len == hidpp::SHORT_LEN { USAGE_SHORT } else { USAGE_LONG };
+    let (mut first, rest): (Vec<usize>, Vec<usize>) = (0..usages.len()).partition(|&i| usages[i] == wanted);
+    first.extend(rest);
+    first
 }
 
 /// Device indexes to probe on a transport.
@@ -169,14 +191,17 @@ pub struct Transport {
     kind: Kind,
     /// One handle per HID collection; on Linux there is just one.
     handles: Vec<HidDevice>,
+    /// Vendor-page usage of each handle, for choosing where to write.
+    usages: Vec<u16>,
     /// Unsolicited messages read while waiting for a reply.
     pending: VecDeque<Message>,
 }
 
 impl Transport {
     pub fn open(api: &HidApi, c: &Candidate) -> io::Result<Self> {
-        let handles = c.paths.iter().map(|p| api.open_path(p).map_err(hid_err)).collect::<io::Result<_>>()?;
-        let mut t = Self { id: c.id.clone(), kind: c.kind, handles, pending: VecDeque::new() };
+        let handles = c.paths.iter().map(|p| api.open_path(&p.path).map_err(hid_err)).collect::<io::Result<_>>()?;
+        let usages = c.paths.iter().map(|p| p.usage).collect();
+        let mut t = Self { id: c.id.clone(), kind: c.kind, handles, usages, pending: VecDeque::new() };
         if t.kind == Kind::Receiver {
             t.write(&ENABLE_NOTIFICATIONS)?;
         }
@@ -195,11 +220,11 @@ impl Transport {
         DeviceKey { transport: self.id.clone(), index }
     }
 
-    /// Write on the first collection that accepts this report length.
+    /// Write on the collection for this report type, falling back to the others.
     fn write(&mut self, report: &[u8]) -> io::Result<()> {
         let mut last = None;
-        for h in &self.handles {
-            match h.write(report) {
+        for i in write_order(&self.usages, report.len()) {
+            match self.handles[i].write(report) {
                 Ok(_) => return Ok(()),
                 Err(e) => last = Some(e),
             }
@@ -311,12 +336,16 @@ mod tests {
 
     const LOGI: u16 = 0x046D;
 
-    fn info(vid: u16, pid: u16, page: u16, path: &str) -> (u16, u16, u16, CString) {
-        (vid, pid, page, CString::new(path).unwrap())
+    fn info(vid: u16, pid: u16, page: u16, path: &str) -> (u16, u16, u16, u16, CString) {
+        info_usage(vid, pid, page, 1, path)
     }
 
-    fn found(list: &[(u16, u16, u16, CString)]) -> Vec<Candidate> {
-        candidates(list.iter().map(|(v, p, u, path)| (*v, *p, *u, path.as_c_str())))
+    fn info_usage(vid: u16, pid: u16, page: u16, usage: u16, path: &str) -> (u16, u16, u16, u16, CString) {
+        (vid, pid, page, usage, CString::new(path).unwrap())
+    }
+
+    fn found(list: &[(u16, u16, u16, u16, CString)]) -> Vec<Candidate> {
+        candidates(list.iter().map(|(v, p, pg, u, path)| (*v, *p, *pg, *u, path.as_c_str())))
     }
 
     #[test]
@@ -381,7 +410,7 @@ mod tests {
         let c = found(&[info(LOGI, 0xC548, 0xFF00, "/dev/hidraw3"), info(LOGI, 0xC548, 0xFF00, "/dev/hidraw3")]);
         assert_eq!(c.len(), 1);
         assert_eq!(c[0].paths.len(), 1);
-        assert_eq!(c[0].id, "/dev/hidraw3");
+        assert!(c[0].id.starts_with("/dev/hidraw3"));
     }
 
     #[test]
@@ -392,8 +421,9 @@ mod tests {
             info(LOGI, 0xB034, 0xFF43, "/dev/hidraw7"),
             info(0x044F, 0xB108, 0xFF00, "/dev/hidraw9"),
         ]);
-        let kinds: Vec<(&str, Kind)> = c.iter().map(|c| (c.id.as_str(), c.kind)).collect();
-        assert_eq!(kinds, [("/dev/hidraw3", Kind::Receiver), ("/dev/hidraw7", Kind::Direct)]);
+        let kinds: Vec<Kind> = c.iter().map(|c| c.kind).collect();
+        assert_eq!(kinds, [Kind::Receiver, Kind::Direct]);
+        assert!(c[0].id.starts_with("/dev/hidraw3") && c[1].id.starts_with("/dev/hidraw7"));
     }
 
     #[test]
@@ -434,5 +464,27 @@ mod tests {
         assert_eq!(name, b"MX");
         let mut name = Vec::new();
         assert!(!append_name(&mut name, b"", 9));
+    }
+
+    #[test]
+    fn reused_path_for_another_product_is_another_transport() {
+        let receiver = found(&[info(LOGI, 0xC548, 0xFF00, "/dev/hidraw3")]);
+        let mouse = found(&[info(LOGI, 0xB034, 0xFF43, "/dev/hidraw3")]);
+        assert_ne!(receiver[0].id, mouse[0].id);
+    }
+
+    #[test]
+    fn candidate_records_each_collection_usage() {
+        let c = found(&[info_usage(LOGI, 0xC548, 0xFF00, 2, WIN_COL2), info_usage(LOGI, 0xC548, 0xFF00, 1, WIN_COL1)]);
+        let usages: Vec<u16> = c[0].paths.iter().map(|p| p.usage).collect();
+        assert_eq!(usages, [2, 1]);
+    }
+
+    #[test]
+    fn writes_go_to_the_collection_for_the_report_length() {
+        assert_eq!(write_order(&[USAGE_LONG, USAGE_SHORT], hidpp::SHORT_LEN), [1, 0]);
+        assert_eq!(write_order(&[USAGE_LONG, USAGE_SHORT], hidpp::LONG_LEN), [0, 1]);
+        assert_eq!(write_order(&[USAGE_SHORT], hidpp::LONG_LEN), [0]);
+        assert_eq!(write_order(&[7, 9], hidpp::SHORT_LEN), [0, 1]);
     }
 }

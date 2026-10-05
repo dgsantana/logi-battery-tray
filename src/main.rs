@@ -15,8 +15,13 @@ use std::sync::mpsc;
 use log::{info, warn};
 
 fn main() -> ExitCode {
-    env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("info")).init();
-    if std::env::args().any(|a| a == "--once") {
+    let once = std::env::args().any(|a| a == "--once");
+    let mut logger = env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("info"));
+    if let Some(file) = platform::log_file().filter(|_| !once) {
+        logger.target(env_logger::Target::Pipe(Box::new(file)));
+    }
+    logger.init();
+    if once {
         platform::attach_console();
         return worker::run_once();
     }

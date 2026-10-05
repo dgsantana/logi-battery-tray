@@ -23,16 +23,19 @@ const LINK_RETRY: Duration = Duration::from_secs(5);
 
 /// One open transport and what we know about its devices.
 struct Link {
+    /// What was opened, to notice when its collections change.
+    candidate: Candidate,
     transport: Transport,
     /// Feature index of UNIFIED_BATTERY per online device.
     battery_idx: HashMap<u8, u8>,
     next_poll: Instant,
 }
 
-/// Candidates not yet open, and open ids no longer found.
-pub fn reconcile(open: &[String], found: &[Candidate]) -> (Vec<Candidate>, Vec<String>) {
-    let to_open = found.iter().filter(|c| !open.contains(&c.id)).cloned().collect();
-    let to_drop = open.iter().filter(|id| !found.iter().any(|c| &c.id == *id)).cloned().collect();
+/// Candidates to open, and open ids to drop. A transport whose collections
+/// changed (e.g. Windows still adding them on hot-plug) is dropped and reopened.
+pub fn reconcile(open: &[Candidate], found: &[Candidate]) -> (Vec<Candidate>, Vec<String>) {
+    let to_open = found.iter().filter(|c| !open.contains(c)).cloned().collect();
+    let to_drop = open.iter().filter(|c| !found.contains(c)).map(|c| c.id.clone()).collect();
     (to_open, to_drop)
 }
 
@@ -59,7 +62,10 @@ pub fn run_once() -> ExitCode {
     let mut state = State::default();
     for candidate in &found {
         let mut link = match Transport::open(&api, candidate) {
-            Ok(t) => Link { transport: t, battery_idx: HashMap::new(), next_poll: Instant::now() },
+            Ok(t) => {
+                state.set_present(&candidate.id, true);
+                Link { candidate: candidate.clone(), transport: t, battery_idx: HashMap::new(), next_poll: Instant::now() }
+            }
             Err(e) => {
                 eprintln!("cannot open {}: {e}", candidate.id);
                 continue;
@@ -157,7 +163,7 @@ pub fn run(cmds: &mpsc::Receiver<Cmd>, publish: impl Fn(Snapshot), notify: impl 
 /// Open new transports and drop vanished ones. Returns whether anything changed.
 fn rediscover(links: &mut Vec<Link>, state: &mut State) -> bool {
     let Some((api, found)) = enumerate() else { return false };
-    let open: Vec<String> = links.iter().map(|l| l.transport.id().to_string()).collect();
+    let open: Vec<Candidate> = links.iter().map(|l| l.candidate.clone()).collect();
     let (to_open, to_drop) = reconcile(&open, &found);
     let mut changed = !to_drop.is_empty();
     links.retain(|l| !to_drop.iter().any(|id| id == l.transport.id()));
@@ -170,7 +176,7 @@ fn rediscover(links: &mut Vec<Link>, state: &mut State) -> bool {
             Ok(transport) => {
                 info!("using {:?} transport {}", candidate.kind, candidate.id);
                 state.set_present(&candidate.id, true);
-                links.push(Link { transport, battery_idx: HashMap::new(), next_poll: Instant::now() });
+                links.push(Link { candidate, transport, battery_idx: HashMap::new(), next_poll: Instant::now() });
                 changed = true;
             }
             Err(e) => debug!("cannot open {}: {e}", candidate.id),
@@ -249,15 +255,20 @@ fn poll_after_link_up(reachable: bool, now: Instant, next_poll: Instant) -> Inst
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::transport::Kind;
+    use crate::transport::{HidPath, Kind};
 
     fn cand(id: &str) -> Candidate {
         Candidate { id: id.into(), kind: Kind::Receiver, paths: Vec::new() }
     }
 
+    fn cand_paths(id: &str, paths: &[&str]) -> Candidate {
+        let paths = paths.iter().map(|p| HidPath { path: std::ffi::CString::new(*p).unwrap(), usage: 1 }).collect();
+        Candidate { id: id.into(), kind: Kind::Receiver, paths }
+    }
+
     #[test]
     fn reconcile_opens_new_and_drops_vanished() {
-        let open = ["kept".to_string(), "gone".to_string()];
+        let open = [cand("kept"), cand("gone")];
         let found = [cand("kept"), cand("new")];
         let (to_open, to_drop) = reconcile(&open, &found);
         assert_eq!(to_open, [cand("new")]);
@@ -266,7 +277,7 @@ mod tests {
 
     #[test]
     fn reconcile_with_nothing_changed_is_a_no_op() {
-        let (to_open, to_drop) = reconcile(&["a".to_string()], &[cand("a")]);
+        let (to_open, to_drop) = reconcile(&[cand("a")], &[cand("a")]);
         assert!(to_open.is_empty());
         assert!(to_drop.is_empty());
     }
@@ -289,5 +300,14 @@ mod tests {
         let now = Instant::now();
         let soon = now + Duration::from_secs(1);
         assert_eq!(poll_after_link_up(false, now, soon), soon);
+    }
+
+    #[test]
+    fn reconcile_reopens_transport_whose_paths_changed() {
+        let open = [cand_paths("r", &["col01"])];
+        let found = [cand_paths("r", &["col01", "col02"])];
+        let (to_open, to_drop) = reconcile(&open, &found);
+        assert_eq!(to_drop, ["r"]);
+        assert_eq!(to_open, [found[0].clone()]);
     }
 }

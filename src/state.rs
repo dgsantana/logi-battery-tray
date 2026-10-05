@@ -75,13 +75,17 @@ impl State {
         }
     }
 
-    /// Mark a transport reachable or gone; devices on a gone transport are hidden.
+    /// Mark a transport reachable or gone. Devices on a gone transport are
+    /// hidden and marked offline, so they return offline until re-probed.
     pub fn set_present(&mut self, transport: &str, present: bool) {
         self.known.insert(transport.into());
         if present {
             self.present.insert(transport.into());
-        } else {
-            self.present.remove(transport);
+            return;
+        }
+        self.present.remove(transport);
+        for entry in self.entries.values_mut().filter(|e| e.device.key.transport == transport) {
+            entry.device.online = false;
         }
     }
 
@@ -306,5 +310,17 @@ mod tests {
         assert!(!s.any_present());
         s.set_present("b", true);
         assert!(s.any_present());
+    }
+
+    #[test]
+    fn devices_of_a_returning_transport_come_back_offline() {
+        let mut s = State::default();
+        s.upsert(dev_on("a", 1, 50));
+        s.set_present("a", false);
+        s.set_present("a", true);
+        let snap = s.snapshot();
+        assert_eq!(snap.len(), 1);
+        assert!(!snap[0].online);
+        assert_eq!(s.lowest(), None);
     }
 }

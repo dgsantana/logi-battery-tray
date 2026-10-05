@@ -8,9 +8,9 @@ pub type Publisher = Box<dyn Fn(Snapshot) + Send>;
 #[cfg(target_os = "linux")]
 mod linux;
 #[cfg(target_os = "linux")]
-pub use self::linux::{attach_console, notify, run};
+pub use self::linux::{attach_console, log_file, notify, run};
 
 #[cfg(windows)]
 mod windows;
 #[cfg(windows)]
-pub use self::windows::{attach_console, notify, run};
+pub use self::windows::{attach_console, log_file, notify, run};

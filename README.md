@@ -21,14 +21,16 @@ Needs Rust and [just](https://github.com/casey/just)
 (`pacman -S just`, `winget install Casey.Just`, or `mise use -g just`).
 
     just install                   # binary, launcher/Start Menu entry, icon, start at login
-    just install autostart=false   # same, without start at login
+    just install false             # same, without start at login
     just uninstall                 # remove all of it
 
 Linux: installs to `~/.cargo/bin`, the desktop entry and icon under
 `~/.local/share`, and autostart under `~/.config/autostart`.
 Windows: installs to `%USERPROFILE%\.cargo\bin`, a Start Menu shortcut, a
 `HKCU\...\Run` entry for start at login, and registers the app so
-notifications show its name and icon.
+notifications show its name and icon. Tray mode logs to
+`%LOCALAPPDATA%\logi-battery-tray\logi-battery-tray.log` (set `RUST_LOG=debug`
+for more detail).
 
 ## Use
 

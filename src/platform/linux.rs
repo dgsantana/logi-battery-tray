@@ -103,6 +103,11 @@ impl ksni::Tray for BatteryTray {
 /// Output already goes to the terminal on Linux.
 pub fn attach_console() {}
 
+/// Logs go to stderr (the session journal for autostarted apps).
+pub fn log_file() -> Option<std::fs::File> {
+    None
+}
+
 /// Start the tray, then run the worker on this thread until it returns.
 pub fn run(cmd_tx: Sender<Cmd>, worker: Box<dyn FnOnce(Publisher) + Send>) -> ExitCode {
     let tray = BatteryTray { devices: Vec::new(), lowest: None, present: false, tx: cmd_tx };

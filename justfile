@@ -31,7 +31,7 @@ icon:
     magick -background none -density 384 packaging/logi-battery-tray.svg -define icon:auto-resize=256,48,32,16 packaging/logi-battery-tray.ico
     rsvg-convert -w 256 -h 256 packaging/logi-battery-tray.svg -o packaging/logi-battery-tray.png
 
-# Install for this user: binary, launcher entry, icon, and start at login
+# Install for this user: binary, launcher entry, icon, and start at login (`just install false` to skip it)
 [linux]
 [script("bash")]
 install autostart="true":
@@ -69,14 +69,14 @@ uninstall:
         update-desktop-database "$data/applications"
     fi
 
-# Install for this user: binary, Start Menu shortcut, toast identity, and start at login
+# Install for this user: binary, Start Menu shortcut, toast identity, and start at login (`just install false` to skip it)
 [windows]
 [script("powershell.exe", "-NoProfile", "-ExecutionPolicy", "Bypass", "-File")]
 [extension(".ps1")]
 install autostart="true":
     $ErrorActionPreference = "Stop"
-    # A running exe cannot be replaced.
-    Stop-Process -Name logi-battery-tray -ErrorAction SilentlyContinue
+    # A running exe cannot be replaced; wait for it to exit.
+    Get-Process logi-battery-tray -ErrorAction SilentlyContinue | Stop-Process -PassThru | Wait-Process
     cargo install --path . --locked
     if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
     $cargoHome = if ($env:CARGO_HOME) { $env:CARGO_HOME } else { Join-Path $env:USERPROFILE ".cargo" }
@@ -107,7 +107,8 @@ install autostart="true":
 [script("powershell.exe", "-NoProfile", "-ExecutionPolicy", "Bypass", "-File")]
 [extension(".ps1")]
 uninstall:
-    Stop-Process -Name logi-battery-tray -ErrorAction SilentlyContinue
+    # Wait for exit: a running exe cannot be deleted.
+    Get-Process logi-battery-tray -ErrorAction SilentlyContinue | Stop-Process -PassThru | Wait-Process
     cargo uninstall logi-battery-tray
     Remove-Item (Join-Path $env:APPDATA "Microsoft\Windows\Start Menu\Programs\Logitech Battery Tray.lnk") -ErrorAction SilentlyContinue
     Remove-ItemProperty "HKCU:\Software\Microsoft\Windows\CurrentVersion\Run" -Name LogiBatteryTray -ErrorAction SilentlyContinue

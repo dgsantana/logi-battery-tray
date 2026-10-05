@@ -10,7 +10,7 @@ use std::thread;
 
 use log::{error, info, warn};
 use tray_icon::menu::{Menu, MenuEvent, MenuId, MenuItem, PredefinedMenuItem};
-use tray_icon::{Icon, TrayIcon, TrayIconBuilder};
+use tray_icon::{Icon, TrayIcon, TrayIconBuilder, TrayIconEvent};
 use windows_sys::Win32::System::Console::{ATTACH_PARENT_PROCESS, AttachConsole};
 use windows_sys::Win32::UI::WindowsAndMessaging::{
     DispatchMessageW, MSG, MsgWaitForMultipleObjects, PM_REMOVE, PeekMessageW, QS_ALLINPUT, TranslateMessage,
@@ -28,33 +28,40 @@ const TOOLTIP_MAX: usize = 127;
 /// Upper bound on one message-loop wait, so snapshots are picked up promptly.
 const PUMP_WAIT_MS: u32 = 100;
 
+/// Log file for tray mode, which has no console:
+/// `%LOCALAPPDATA%\logi-battery-tray\logi-battery-tray.log`, truncated per start.
+pub fn log_file() -> Option<std::fs::File> {
+    let dir = std::path::PathBuf::from(std::env::var_os("LOCALAPPDATA")?).join("logi-battery-tray");
+    std::fs::create_dir_all(&dir).ok()?;
+    std::fs::File::create(dir.join("logi-battery-tray.log")).ok()
+}
+
 /// Send `--once` output to the terminal that started us (the binary has no
 /// console of its own).
 pub fn attach_console() {
     unsafe { AttachConsole(ATTACH_PARENT_PROCESS) };
 }
 
+/// Fixed menu ids, so a click survives the menu being rebuilt.
+const MENU_REFRESH: &str = "refresh";
+const MENU_QUIT: &str = "quit";
+
 struct Ui {
     tray: TrayIcon,
-    refresh: MenuId,
-    quit: MenuId,
 }
 
 impl Ui {
     fn new(snap: &Snapshot) -> Result<Self, tray_icon::Error> {
-        let (menu, refresh, quit) = build_menu(snap);
         let tray = TrayIconBuilder::new()
-            .with_menu(Box::new(menu))
+            .with_menu(Box::new(build_menu(snap)))
             .with_icon(render_icon(snap))
             .with_tooltip(tooltip(snap))
             .build()?;
-        Ok(Self { tray, refresh, quit })
+        Ok(Self { tray })
     }
 
     fn show(&mut self, snap: &Snapshot) {
-        let (menu, refresh, quit) = build_menu(snap);
-        self.tray.set_menu(Some(Box::new(menu)));
-        (self.refresh, self.quit) = (refresh, quit);
+        self.tray.set_menu(Some(Box::new(build_menu(snap))));
         if let Err(e) = self.tray.set_icon(Some(render_icon(snap))) {
             warn!("cannot update tray icon: {e}");
         }
@@ -63,27 +70,26 @@ impl Ui {
         }
     }
 
-    fn command(&self, id: &MenuId) -> Option<Cmd> {
-        if *id == self.refresh {
-            Some(Cmd::Refresh)
-        } else if *id == self.quit {
-            Some(Cmd::Quit)
-        } else {
-            None
-        }
+}
+
+fn command(id: &MenuId) -> Option<Cmd> {
+    match id.as_ref() {
+        MENU_REFRESH => Some(Cmd::Refresh),
+        MENU_QUIT => Some(Cmd::Quit),
+        _ => None,
     }
 }
 
-/// Device lines (disabled), then Refresh and Quit. Returns the two ids.
-fn build_menu(snap: &Snapshot) -> (Menu, MenuId, MenuId) {
+/// Device lines (disabled), then Refresh and Quit.
+fn build_menu(snap: &Snapshot) -> Menu {
     let menu = Menu::new();
     let lines: Vec<String> = if snap.devices.is_empty() || !snap.present {
         vec![summary(&snap.devices, snap.present)]
     } else {
         snap.devices.iter().map(device_line).collect()
     };
-    let refresh = MenuItem::new("Refresh", true, None);
-    let quit = MenuItem::new("Quit", true, None);
+    let refresh = MenuItem::with_id(MENU_REFRESH, "Refresh", true, None);
+    let quit = MenuItem::with_id(MENU_QUIT, "Quit", true, None);
     let appended = lines
         .iter()
         .try_for_each(|l| menu.append(&MenuItem::new(l, false, None)))
@@ -93,7 +99,7 @@ fn build_menu(snap: &Snapshot) -> (Menu, MenuId, MenuId) {
     if let Err(e) = appended {
         warn!("cannot build tray menu: {e}");
     }
-    (menu, refresh.id().clone(), quit.id().clone())
+    menu
 }
 
 fn render_icon(snap: &Snapshot) -> Icon {
@@ -127,6 +133,9 @@ fn pump_messages() {
 
 /// Show the tray on this thread and run the worker on another until it returns.
 pub fn run(cmd_tx: Sender<Cmd>, worker: Box<dyn FnOnce(Publisher) + Send>) -> ExitCode {
+    // Hover/click events are unused; without a handler tray-icon queues them
+    // in an unbounded channel for the life of the process.
+    TrayIconEvent::set_event_handler(Some(|_| {}));
     let (snap_tx, snap_rx) = mpsc::channel::<Snapshot>();
     let worker_thread = thread::spawn(move || {
         worker(Box::new(move |snap| {
@@ -152,7 +161,7 @@ pub fn run(cmd_tx: Sender<Cmd>, worker: Box<dyn FnOnce(Publisher) + Send>) -> Ex
             shown = snap;
         }
         while let Ok(event) = MenuEvent::receiver().try_recv() {
-            if let Some(cmd) = ui.command(&event.id) {
+            if let Some(cmd) = command(&event.id) {
                 let _ = cmd_tx.send(cmd);
             }
         }

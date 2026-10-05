@@ -62,7 +62,8 @@ fn in_cross(x: u32, y: u32) -> bool {
 /// charging, a cross when there is no reading.
 pub fn render(lowest: Option<BatteryStatus>) -> Vec<u8> {
     let (_, iy0, _, iy1) = interior();
-    let fill_rows = lowest.map_or(0, |b| (iy1 - iy0) * u32::from(tray::level(b)) / 100);
+    // Any charge left shows at least one row, so 1-9% is not drawn empty.
+    let fill_rows = lowest.map_or(0, |b| ((iy1 - iy0) * u32::from(tray::level(b)) / 100).max(u32::from(b.percent > 0)));
     let fill_color = match lowest {
         Some(b) if b.percent <= THRESHOLDS[0] => FILL_LOW,
         _ => FILL_OK,
@@ -162,5 +163,11 @@ mod tests {
             }
         }
         assert!(!in_shape(0, 0) && !in_shape(SIZE - 1, 0));
+    }
+
+    #[test]
+    fn any_charge_left_shows_a_red_sliver() {
+        assert!(count(&render(batt(5, ChargingState::Discharging)), FILL_LOW) > 0);
+        assert_eq!(fill(&render(batt(0, ChargingState::Discharging))), 0);
     }
 }
