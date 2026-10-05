@@ -1,4 +1,5 @@
 mod hidpp;
+mod icon;
 mod instance;
 mod platform;
 mod state;
