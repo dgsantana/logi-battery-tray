@@ -2,6 +2,8 @@
 name = "logi-battery-tray"
 version = "0.1.0"
 edition = "2024"
+license = "MIT OR Apache-2.0"
+repository = "https://github.com/dgsantana/logi-battery-tray"
 
 [dependencies]
 env_logger = "0.11.11"
