@@ -24,3 +24,8 @@ once:
 [linux]
 check-windows:
     cargo clippy --all-targets --target x86_64-pc-windows-msvc -- -D warnings
+
+# Regenerate the Windows .ico from the SVG (maintenance; the .ico is committed)
+[linux]
+icon:
+    magick -background none -density 384 packaging/logi-battery-tray.svg -define icon:auto-resize=256,48,32,16 packaging/logi-battery-tray.ico
