@@ -1,0 +1,9 @@
+include = ["Cargo.toml"]
+
+# Pin the Cargo schema: the extension fails to parse the schemastore catalog,
+# so automatic association by file name does not work.
+[[rule]]
+include = ["Cargo.toml"]
+
+[rule.schema]
+path = "https://www.schemastore.org/cargo.json"

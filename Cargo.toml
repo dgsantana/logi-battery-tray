@@ -9,3 +9,8 @@ ksni = { version = "0.3.6", features = ["blocking"] }
 libc = "0.2"
 log = "0.4.34"
 notify-rust = "4.18.1"
+
+[profile.release]
+lto = "fat"
+strip = "debuginfo"
+opt-level = "z"
