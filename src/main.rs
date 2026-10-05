@@ -140,7 +140,7 @@ fn track(
             Some(Message::Event { dev, feat_idx, func: 0, data }) if battery_idx.get(&dev) == Some(&feat_idx) => {
                 let Some(battery) = hidpp::parse_battery(&data) else { continue };
                 debug!("battery event dev {dev}: {battery:?}");
-                notify(state.set_battery(dev, battery));
+                notify(state.set_battery(&rcv.key(dev), battery));
                 publish(state, true);
             }
             Some(Message::Connection { dev, linked }) => {
@@ -150,7 +150,7 @@ fn track(
                     let reachable = probe(rcv, state, &mut battery_idx, dev)?;
                     next_poll = poll_after_link_up(reachable, Instant::now(), next_poll);
                 } else {
-                    state.set_online(dev, false);
+                    state.set_online(&rcv.key(dev), false);
                 }
                 publish(state, true);
             }
@@ -165,12 +165,12 @@ fn refresh(rcv: &mut Receiver, state: &mut State, battery_idx: &mut HashMap<u8, 
         return probe(rcv, state, battery_idx, dev).map(drop);
     };
     match rcv.read_battery(dev, idx) {
-        Ok(battery) => notify(state.set_battery(dev, battery)),
+        Ok(battery) => notify(state.set_battery(&rcv.key(dev), battery)),
         Err(ReqError::Io(e)) => return Err(e),
         Err(e) => {
             debug!("dev {dev} unreachable: {e}");
             battery_idx.remove(&dev);
-            state.set_online(dev, false);
+            state.set_online(&rcv.key(dev), false);
         }
     }
     Ok(())
@@ -191,7 +191,7 @@ fn probe(rcv: &mut Receiver, state: &mut State, battery_idx: &mut HashMap<u8, u8
         Err(ReqError::Io(e)) => Err(e),
         Err(e) => {
             debug!("dev {dev} unreachable: {e}");
-            state.set_online(dev, false);
+            state.set_online(&rcv.key(dev), false);
             Ok(false)
         }
     }

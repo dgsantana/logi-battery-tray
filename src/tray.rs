@@ -146,13 +146,14 @@ impl ksni::Tray for BatteryTray {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::state::DeviceKey;
 
     fn batt(percent: u8, charging: ChargingState) -> Option<BatteryStatus> {
         Some(BatteryStatus { percent, charging })
     }
 
     fn dev(name: &str, battery: Option<BatteryStatus>, online: bool) -> Device {
-        Device { index: 2, name: name.into(), kind: DeviceKind::Mouse, battery, online }
+        Device { key: DeviceKey { transport: "t".into(), index: 2 }, name: name.into(), kind: DeviceKind::Mouse, battery, online }
     }
 
     #[test]

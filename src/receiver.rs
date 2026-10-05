@@ -12,7 +12,7 @@ use log::debug;
 use crate::hidpp::{
     self, BatteryStatus, DeviceKind, Message, FEATURE_DEVICE_NAME, FEATURE_UNIFIED_BATTERY, SWID,
 };
-use crate::state::Device;
+use crate::state::{Device, DeviceKey};
 
 const VENDOR_LOGITECH: &str = "0000046D";
 const PRODUCT_BOLT: &str = "0000C548";
@@ -95,6 +95,8 @@ pub fn find() -> Option<PathBuf> {
 
 pub struct Receiver {
     file: File,
+    /// Transport id: the hidraw path.
+    id: String,
     /// Unsolicited messages read while waiting for a reply.
     pending: VecDeque<Message>,
 }
@@ -103,7 +105,11 @@ impl Receiver {
     pub fn open(path: &Path) -> io::Result<Self> {
         let mut file = OpenOptions::new().read(true).write(true).open(path)?;
         file.write_all(&ENABLE_NOTIFICATIONS)?;
-        Ok(Self { file, pending: VecDeque::new() })
+        Ok(Self { file, id: path.display().to_string(), pending: VecDeque::new() })
+    }
+
+    pub fn key(&self, index: u8) -> DeviceKey {
+        DeviceKey { transport: self.id.clone(), index }
     }
 
     /// Wait up to `timeout` for one message. `Ok(None)` on timeout.
@@ -202,7 +208,7 @@ impl Receiver {
             Some(idx) => Some(self.read_battery(dev, idx)?),
             None => None,
         };
-        Ok(Probe { device: Device { index: dev, name, kind, battery, online: true }, battery_idx })
+        Ok(Probe { device: Device { key: self.key(dev), name, kind, battery, online: true }, battery_idx })
     }
 }
 
