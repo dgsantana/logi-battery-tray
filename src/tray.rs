@@ -3,11 +3,8 @@
 use crate::hidpp::{BatteryStatus, ChargingState};
 use crate::state::{Device, State};
 
-// Used by the Windows tray once it lands (Task 8).
-#[cfg_attr(windows, allow(dead_code))]
 pub const TITLE: &str = "Logitech batteries";
 
-#[cfg_attr(windows, allow(dead_code))]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Cmd {
     Refresh,

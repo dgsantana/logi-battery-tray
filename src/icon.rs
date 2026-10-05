@@ -1,7 +1,6 @@
 //! Battery tray icon drawn as RGBA pixels, for platforms without a themed
 //! battery icon set (Windows). Plain Rust so it is tested everywhere.
-// Windows uses this from Task 8 on; until then it is only exercised by tests.
-#![allow(dead_code)]
+#![cfg_attr(not(windows), allow(dead_code))]
 
 use crate::hidpp::{BatteryStatus, ChargingState};
 use crate::state::THRESHOLDS;

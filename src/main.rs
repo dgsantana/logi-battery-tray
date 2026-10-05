@@ -1,3 +1,5 @@
+#![cfg_attr(windows, windows_subsystem = "windows")]
+
 mod hidpp;
 mod icon;
 mod instance;
@@ -15,6 +17,7 @@ use log::{info, warn};
 fn main() -> ExitCode {
     env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("info")).init();
     if std::env::args().any(|a| a == "--once") {
+        platform::attach_console();
         return worker::run_once();
     }
 
