@@ -2,7 +2,7 @@
 
 use std::collections::BTreeMap;
 
-use crate::hidpp::{BatteryStatus, Charging, DeviceKind};
+use crate::hidpp::{BatteryStatus, ChargingState, DeviceKind};
 
 /// Alert when a discharging device drops to or below each of these.
 pub const THRESHOLDS: [u8; 2] = [15, 5];
@@ -82,7 +82,7 @@ impl Entry {
         for (fired, &threshold) in self.fired.iter_mut().zip(&THRESHOLDS) {
             if battery.percent > threshold {
                 *fired = false;
-            } else if battery.charging == Charging::Discharging && !*fired {
+            } else if battery.charging == ChargingState::Discharging && !*fired {
                 *fired = true;
                 crossed = true;
             }
@@ -98,7 +98,7 @@ impl Entry {
 mod tests {
     use super::*;
 
-    fn batt(percent: u8, charging: Charging) -> BatteryStatus {
+    fn batt(percent: u8, charging: ChargingState) -> BatteryStatus {
         BatteryStatus { percent, charging }
     }
 
@@ -107,7 +107,7 @@ mod tests {
             index,
             name: format!("dev{index}"),
             kind: DeviceKind::Mouse,
-            battery: Some(batt(percent, Charging::Discharging)),
+            battery: Some(batt(percent, ChargingState::Discharging)),
             online: true,
         }
     }
@@ -132,9 +132,9 @@ mod tests {
         s.upsert(dev(2, 40));
         s.upsert(dev(4, 80));
         s.upsert(Device { battery: None, ..dev(5, 0) });
-        assert_eq!(s.lowest(), Some(batt(40, Charging::Discharging)));
+        assert_eq!(s.lowest(), Some(batt(40, ChargingState::Discharging)));
         s.set_online(2, false);
-        assert_eq!(s.lowest(), Some(batt(80, Charging::Discharging)));
+        assert_eq!(s.lowest(), Some(batt(80, ChargingState::Discharging)));
     }
 
     #[test]
@@ -144,47 +144,47 @@ mod tests {
         s.set_online(2, false);
         let d = &s.snapshot()[0];
         assert!(!d.online);
-        assert_eq!(d.battery, Some(batt(40, Charging::Discharging)));
+        assert_eq!(d.battery, Some(batt(40, ChargingState::Discharging)));
     }
 
     #[test]
     fn crossing_first_threshold_fires_once() {
         let mut s = State::default();
         assert!(s.upsert(dev(2, 20)).is_empty());
-        assert_eq!(s.set_battery(2, batt(15, Charging::Discharging)), alert(2, 15));
-        assert!(s.set_battery(2, batt(14, Charging::Discharging)).is_empty());
-        assert!(s.set_battery(2, batt(10, Charging::Discharging)).is_empty());
+        assert_eq!(s.set_battery(2, batt(15, ChargingState::Discharging)), alert(2, 15));
+        assert!(s.set_battery(2, batt(14, ChargingState::Discharging)).is_empty());
+        assert!(s.set_battery(2, batt(10, ChargingState::Discharging)).is_empty());
     }
 
     #[test]
     fn crossing_second_threshold_fires_again() {
         let mut s = State::default();
         s.upsert(dev(2, 12));
-        assert_eq!(s.set_battery(2, batt(5, Charging::Discharging)), alert(2, 5));
-        assert!(s.set_battery(2, batt(4, Charging::Discharging)).is_empty());
+        assert_eq!(s.set_battery(2, batt(5, ChargingState::Discharging)), alert(2, 5));
+        assert!(s.set_battery(2, batt(4, ChargingState::Discharging)).is_empty());
     }
 
     #[test]
     fn skipping_both_thresholds_fires_one_alert() {
         let mut s = State::default();
         assert_eq!(s.upsert(dev(2, 3)), alert(2, 3));
-        assert!(s.set_battery(2, batt(10, Charging::Discharging)).is_empty());
+        assert!(s.set_battery(2, batt(10, ChargingState::Discharging)).is_empty());
     }
 
     #[test]
     fn rising_above_threshold_rearms() {
         let mut s = State::default();
         s.upsert(dev(2, 10));
-        s.set_battery(2, batt(60, Charging::Discharging));
-        assert_eq!(s.set_battery(2, batt(15, Charging::Discharging)), alert(2, 15));
+        s.set_battery(2, batt(60, ChargingState::Discharging));
+        assert_eq!(s.set_battery(2, batt(15, ChargingState::Discharging)), alert(2, 15));
     }
 
     #[test]
     fn charging_suppresses_alerts() {
         let mut s = State::default();
         s.upsert(dev(2, 30));
-        assert!(s.set_battery(2, batt(10, Charging::Charging)).is_empty());
-        assert!(s.set_battery(2, batt(4, Charging::Full)).is_empty());
+        assert!(s.set_battery(2, batt(10, ChargingState::Charging)).is_empty());
+        assert!(s.set_battery(2, batt(4, ChargingState::Full)).is_empty());
     }
 
     #[test]
@@ -192,14 +192,14 @@ mod tests {
         let mut s = State::default();
         s.upsert(dev(2, 40));
         s.set_online(2, false);
-        s.set_battery(2, batt(39, Charging::Discharging));
+        s.set_battery(2, batt(39, ChargingState::Discharging));
         assert!(s.snapshot()[0].online);
     }
 
     #[test]
     fn set_battery_on_unknown_device_is_ignored() {
         let mut s = State::default();
-        assert!(s.set_battery(9, batt(1, Charging::Discharging)).is_empty());
+        assert!(s.set_battery(9, batt(1, ChargingState::Discharging)).is_empty());
         assert!(s.snapshot().is_empty());
     }
 

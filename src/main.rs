@@ -188,7 +188,7 @@ fn probe(rcv: &mut Receiver, state: &mut State, battery_idx: &mut HashMap<u8, u8
             notify(state.upsert(found.device));
             Ok(true)
         }
-        Err(ReqError::Io(e)) => return Err(e),
+        Err(ReqError::Io(e)) => Err(e),
         Err(e) => {
             debug!("dev {dev} unreachable: {e}");
             state.set_online(dev, false);

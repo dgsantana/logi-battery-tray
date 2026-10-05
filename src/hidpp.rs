@@ -32,7 +32,7 @@ pub enum Message {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum Charging {
+pub enum ChargingState {
     Discharging,
     Charging,
     Full,
@@ -42,7 +42,7 @@ pub enum Charging {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct BatteryStatus {
     pub percent: u8,
-    pub charging: Charging,
+    pub charging: ChargingState,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -61,9 +61,9 @@ pub fn request(dev: u8, feat_idx: u8, func: u8, params: &[u8]) -> [u8; SHORT_LEN
 }
 
 pub fn parse(buf: &[u8]) -> Option<Message> {
-    let len = match buf.first()? {
-        &REPORT_SHORT => SHORT_LEN,
-        &REPORT_LONG => LONG_LEN,
+    let len = match *buf.first()? {
+        REPORT_SHORT => SHORT_LEN,
+        REPORT_LONG => LONG_LEN,
         _ => return None,
     };
     if buf.len() < len {
@@ -96,10 +96,10 @@ pub fn parse_battery(data: &[u8]) -> Option<BatteryStatus> {
         return None;
     }
     let charging = match code {
-        0 => Charging::Discharging,
-        1 | 2 => Charging::Charging,
-        3 => Charging::Full,
-        _ => Charging::Error,
+        0 => ChargingState::Discharging,
+        1 | 2 => ChargingState::Charging,
+        3 => ChargingState::Full,
+        _ => ChargingState::Error,
     };
     Some(BatteryStatus { percent, charging })
 }
@@ -156,7 +156,7 @@ mod tests {
         let Message::Reply { func: 1, data, .. } = m else { panic!("{m:?}") };
         assert_eq!(
             parse_battery(&data),
-            Some(BatteryStatus { percent: 95, charging: Charging::Discharging })
+            Some(BatteryStatus { percent: 95, charging: ChargingState::Discharging })
         );
     }
 
@@ -166,15 +166,15 @@ mod tests {
         let Message::Reply { data, .. } = m else { panic!("{m:?}") };
         assert_eq!(
             parse_battery(&data),
-            Some(BatteryStatus { percent: 100, charging: Charging::Charging })
+            Some(BatteryStatus { percent: 100, charging: ChargingState::Charging })
         );
     }
 
     #[test]
     fn battery_charging_codes() {
-        assert_eq!(parse_battery(&[50, 4, 2, 1]).unwrap().charging, Charging::Charging);
-        assert_eq!(parse_battery(&[100, 8, 3, 1]).unwrap().charging, Charging::Full);
-        assert_eq!(parse_battery(&[50, 4, 4, 0]).unwrap().charging, Charging::Error);
+        assert_eq!(parse_battery(&[50, 4, 2, 1]).unwrap().charging, ChargingState::Charging);
+        assert_eq!(parse_battery(&[100, 8, 3, 1]).unwrap().charging, ChargingState::Full);
+        assert_eq!(parse_battery(&[50, 4, 4, 0]).unwrap().charging, ChargingState::Error);
     }
 
     #[test]

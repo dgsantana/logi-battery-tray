@@ -5,7 +5,7 @@ use std::sync::mpsc::Sender;
 use ksni::menu::{MenuItem, StandardItem};
 use ksni::{Category, ToolTip};
 
-use crate::hidpp::{BatteryStatus, Charging, DeviceKind};
+use crate::hidpp::{BatteryStatus, ChargingState, DeviceKind};
 use crate::state::Device;
 
 pub const TITLE: &str = "Logitech batteries";
@@ -28,8 +28,8 @@ pub fn icon_for(lowest: Option<BatteryStatus>) -> String {
     let Some(b) = lowest else { return "battery-missing".into() };
     let level = b.percent / 10 * 10;
     match b.charging {
-        Charging::Charging | Charging::Full => format!("battery-{level:03}-charging"),
-        Charging::Discharging | Charging::Error => format!("battery-{level:03}"),
+        ChargingState::Charging | ChargingState::Full => format!("battery-{level:03}-charging"),
+        ChargingState::Discharging | ChargingState::Error => format!("battery-{level:03}"),
     }
 }
 
@@ -39,10 +39,10 @@ pub fn device_line(device: &Device) -> String {
     match (device.online, device.battery) {
         (true, Some(b)) => {
             let note = match b.charging {
-                Charging::Discharging => "",
-                Charging::Charging => " (charging)",
-                Charging::Full => " (full)",
-                Charging::Error => " (battery error)",
+                ChargingState::Discharging => "",
+                ChargingState::Charging => " (charging)",
+                ChargingState::Full => " (full)",
+                ChargingState::Error => " (battery error)",
             };
             format!("{name} — {}%{note}", b.percent)
         }
@@ -147,7 +147,7 @@ impl ksni::Tray for BatteryTray {
 mod tests {
     use super::*;
 
-    fn batt(percent: u8, charging: Charging) -> Option<BatteryStatus> {
+    fn batt(percent: u8, charging: ChargingState) -> Option<BatteryStatus> {
         Some(BatteryStatus { percent, charging })
     }
 
@@ -157,17 +157,17 @@ mod tests {
 
     #[test]
     fn icon_rounds_down_to_tens() {
-        assert_eq!(icon_for(batt(95, Charging::Discharging)), "battery-090");
-        assert_eq!(icon_for(batt(100, Charging::Discharging)), "battery-100");
-        assert_eq!(icon_for(batt(5, Charging::Discharging)), "battery-000");
-        assert_eq!(icon_for(batt(15, Charging::Error)), "battery-010");
+        assert_eq!(icon_for(batt(95, ChargingState::Discharging)), "battery-090");
+        assert_eq!(icon_for(batt(100, ChargingState::Discharging)), "battery-100");
+        assert_eq!(icon_for(batt(5, ChargingState::Discharging)), "battery-000");
+        assert_eq!(icon_for(batt(15, ChargingState::Error)), "battery-010");
     }
 
     #[test]
     fn icon_shows_charging_when_plugged() {
-        assert_eq!(icon_for(batt(100, Charging::Charging)), "battery-100-charging");
-        assert_eq!(icon_for(batt(100, Charging::Full)), "battery-100-charging");
-        assert_eq!(icon_for(batt(42, Charging::Charging)), "battery-040-charging");
+        assert_eq!(icon_for(batt(100, ChargingState::Charging)), "battery-100-charging");
+        assert_eq!(icon_for(batt(100, ChargingState::Full)), "battery-100-charging");
+        assert_eq!(icon_for(batt(42, ChargingState::Charging)), "battery-040-charging");
     }
 
     #[test]
@@ -177,11 +177,11 @@ mod tests {
 
     #[test]
     fn device_lines() {
-        assert_eq!(device_line(&dev("MX Master 3S", batt(95, Charging::Discharging), true)), "MX Master 3S — 95%");
-        assert_eq!(device_line(&dev("MX Keys S", batt(100, Charging::Charging), true)), "MX Keys S — 100% (charging)");
-        assert_eq!(device_line(&dev("MX Keys S", batt(100, Charging::Full), true)), "MX Keys S — 100% (full)");
-        assert_eq!(device_line(&dev("M", batt(30, Charging::Error), true)), "M — 30% (battery error)");
-        assert_eq!(device_line(&dev("MX Keys S", batt(100, Charging::Discharging), false)), "MX Keys S — offline (last 100%)");
+        assert_eq!(device_line(&dev("MX Master 3S", batt(95, ChargingState::Discharging), true)), "MX Master 3S — 95%");
+        assert_eq!(device_line(&dev("MX Keys S", batt(100, ChargingState::Charging), true)), "MX Keys S — 100% (charging)");
+        assert_eq!(device_line(&dev("MX Keys S", batt(100, ChargingState::Full), true)), "MX Keys S — 100% (full)");
+        assert_eq!(device_line(&dev("M", batt(30, ChargingState::Error), true)), "M — 30% (battery error)");
+        assert_eq!(device_line(&dev("MX Keys S", batt(100, ChargingState::Discharging), false)), "MX Keys S — offline (last 100%)");
         assert_eq!(device_line(&dev("M", None, false)), "M — offline");
         assert_eq!(device_line(&dev("M", None, true)), "M — battery unknown");
     }
@@ -201,8 +201,8 @@ mod tests {
     fn menu_hides_stale_devices_without_receiver() {
         let (tx, _rx) = std::sync::mpsc::channel();
         let mut tray = BatteryTray {
-            devices: vec![dev("A", batt(50, Charging::Discharging), true)],
-            lowest: batt(50, Charging::Discharging),
+            devices: vec![dev("A", batt(50, ChargingState::Discharging), true)],
+            lowest: batt(50, ChargingState::Discharging),
             receiver_present: true,
             tx,
         };
@@ -213,7 +213,7 @@ mod tests {
 
     #[test]
     fn summary_lists_devices_or_explains_absence() {
-        let devices = [dev("A", batt(50, Charging::Discharging), true), dev("B", None, true)];
+        let devices = [dev("A", batt(50, ChargingState::Discharging), true), dev("B", None, true)];
         assert_eq!(summary(&devices, true), "A — 50%\nB — battery unknown");
         assert_eq!(summary(&[], true), "No devices found");
         assert_eq!(summary(&devices, false), "Receiver not found");
