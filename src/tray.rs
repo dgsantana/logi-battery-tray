@@ -6,7 +6,7 @@ use ksni::menu::{MenuItem, StandardItem};
 use ksni::{Category, ToolTip};
 
 use crate::hidpp::{BatteryStatus, ChargingState, DeviceKind};
-use crate::state::Device;
+use crate::state::{Device, State};
 
 pub const TITLE: &str = "Logitech batteries";
 
@@ -16,10 +16,25 @@ pub enum Cmd {
     Quit,
 }
 
+/// What the UI shows: visible devices, the lowest battery, and whether any
+/// transport is reachable.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Snapshot {
+    pub devices: Vec<Device>,
+    pub lowest: Option<BatteryStatus>,
+    pub present: bool,
+}
+
+impl Snapshot {
+    pub fn of(state: &State) -> Self {
+        Self { devices: state.snapshot(), lowest: state.lowest(), present: state.any_present() }
+    }
+}
+
 pub struct BatteryTray {
     pub devices: Vec<Device>,
     pub lowest: Option<BatteryStatus>,
-    pub receiver_present: bool,
+    pub present: bool,
     pub tx: Sender<Cmd>,
 }
 
@@ -53,9 +68,9 @@ pub fn device_line(device: &Device) -> String {
 }
 
 /// Tooltip body.
-pub fn summary(devices: &[Device], receiver_present: bool) -> String {
-    if !receiver_present {
-        return "Receiver not found".into();
+pub fn summary(devices: &[Device], present: bool) -> String {
+    if !present {
+        return "No Logitech devices found".into();
     }
     if devices.is_empty() {
         return "No devices found".into();
@@ -77,22 +92,22 @@ impl ksni::Tray for BatteryTray {
     }
 
     fn icon_name(&self) -> String {
-        icon_for(self.lowest.filter(|_| self.receiver_present))
+        icon_for(self.lowest.filter(|_| self.present))
     }
 
     fn tool_tip(&self) -> ToolTip {
         ToolTip {
             icon_name: self.icon_name(),
             title: TITLE.into(),
-            description: summary(&self.devices, self.receiver_present),
+            description: summary(&self.devices, self.present),
             ..Default::default()
         }
     }
 
     fn menu(&self) -> Vec<MenuItem<Self>> {
-        let mut items: Vec<MenuItem<Self>> = if self.devices.is_empty() || !self.receiver_present {
+        let mut items: Vec<MenuItem<Self>> = if self.devices.is_empty() || !self.present {
             vec![StandardItem {
-                label: summary(&self.devices, self.receiver_present),
+                label: summary(&self.devices, self.present),
                 enabled: false,
                 ..Default::default()
             }
@@ -204,12 +219,12 @@ mod tests {
         let mut tray = BatteryTray {
             devices: vec![dev("A", batt(50, ChargingState::Discharging), true)],
             lowest: batt(50, ChargingState::Discharging),
-            receiver_present: true,
+            present: true,
             tx,
         };
         assert_eq!(menu_labels(&tray), ["A — 50%", "Refresh", "Quit"]);
-        tray.receiver_present = false;
-        assert_eq!(menu_labels(&tray), ["Receiver not found", "Refresh", "Quit"]);
+        tray.present = false;
+        assert_eq!(menu_labels(&tray), ["No Logitech devices found", "Refresh", "Quit"]);
     }
 
     #[test]
@@ -217,6 +232,24 @@ mod tests {
         let devices = [dev("A", batt(50, ChargingState::Discharging), true), dev("B", None, true)];
         assert_eq!(summary(&devices, true), "A — 50%\nB — battery unknown");
         assert_eq!(summary(&[], true), "No devices found");
-        assert_eq!(summary(&devices, false), "Receiver not found");
+        assert_eq!(summary(&devices, false), "No Logitech devices found");
+    }
+
+    #[test]
+    fn snapshot_of_state_with_one_transport_gone() {
+        let mut state = crate::state::State::default();
+        let mut a = dev("A", batt(20, ChargingState::Discharging), true);
+        a.key.transport = "a".into();
+        let mut b = dev("B", batt(60, ChargingState::Discharging), true);
+        b.key.transport = "b".into();
+        state.upsert(a);
+        state.upsert(b);
+        state.set_present("a", false);
+        let snap = Snapshot::of(&state);
+        assert!(snap.present);
+        assert_eq!(snap.devices.iter().map(|d| d.name.as_str()).collect::<Vec<_>>(), ["B"]);
+        assert_eq!(snap.lowest, batt(60, ChargingState::Discharging));
+        state.set_present("b", false);
+        assert!(!Snapshot::of(&state).present);
     }
 }
