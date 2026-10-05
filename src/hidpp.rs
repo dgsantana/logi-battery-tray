@@ -76,7 +76,7 @@ pub fn parse(buf: &[u8]) -> Option<Message> {
             let (func, swid) = (buf[4] >> 4, buf[4] & 0x0F);
             Message::Error10 { dev, feat_idx: b3, func, swid, code: buf[5] }
         }
-        (REPORT_LONG, FEAT_IDX_ERROR_20) => {
+        (_, FEAT_IDX_ERROR_20) => {
             let (func, swid) = (buf[4] >> 4, buf[4] & 0x0F);
             Message::Error20 { dev, feat_idx: b3, func, swid, code: buf[5] }
         }
@@ -199,6 +199,12 @@ mod tests {
     #[test]
     fn parses_hidpp20_error() {
         let m = parse(&hex("11 02 ff 08 1a 02 00 00 00 00 00 00 00 00 00 00 00 00 00 00")).unwrap();
+        assert_eq!(m, Message::Error20 { dev: 2, feat_idx: 8, func: 1, swid: SWID, code: 2 });
+    }
+
+    #[test]
+    fn parses_hidpp20_error_in_short_report() {
+        let m = parse(&hex("10 02 ff 08 1a 02 00")).unwrap();
         assert_eq!(m, Message::Error20 { dev: 2, feat_idx: 8, func: 1, swid: SWID, code: 2 });
     }
 

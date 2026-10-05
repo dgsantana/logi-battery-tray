@@ -20,6 +20,8 @@ use crate::tray::{BatteryTray, Cmd};
 const POLL_INTERVAL: Duration = Duration::from_secs(5 * 60);
 const REDISCOVER_INTERVAL: Duration = Duration::from_secs(10);
 const EVENT_WAIT: Duration = Duration::from_secs(1);
+/// Retry delay when a device that just linked up does not answer yet.
+const LINK_RETRY: Duration = Duration::from_secs(5);
 
 fn main() -> ExitCode {
     env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("info")).init();
@@ -145,7 +147,8 @@ fn track(
                 debug!("dev {dev} link {}", if linked { "up" } else { "down" });
                 battery_idx.remove(&dev);
                 if linked {
-                    probe(rcv, state, &mut battery_idx, dev)?;
+                    let reachable = probe(rcv, state, &mut battery_idx, dev)?;
+                    next_poll = poll_after_link_up(reachable, Instant::now(), next_poll);
                 } else {
                     state.set_online(dev, false);
                 }
@@ -159,7 +162,7 @@ fn track(
 /// Re-read a known device's battery, or probe it from scratch.
 fn refresh(rcv: &mut Receiver, state: &mut State, battery_idx: &mut HashMap<u8, u8>, dev: u8) -> io::Result<()> {
     let Some(&idx) = battery_idx.get(&dev) else {
-        return probe(rcv, state, battery_idx, dev);
+        return probe(rcv, state, battery_idx, dev).map(drop);
     };
     match rcv.read_battery(dev, idx) {
         Ok(battery) => notify(state.set_battery(dev, battery)),
@@ -174,7 +177,8 @@ fn refresh(rcv: &mut Receiver, state: &mut State, battery_idx: &mut HashMap<u8, 
 }
 
 /// Query a device's name, kind and battery; unreachable devices are marked offline.
-fn probe(rcv: &mut Receiver, state: &mut State, battery_idx: &mut HashMap<u8, u8>, dev: u8) -> io::Result<()> {
+/// Returns whether the device answered.
+fn probe(rcv: &mut Receiver, state: &mut State, battery_idx: &mut HashMap<u8, u8>, dev: u8) -> io::Result<bool> {
     match rcv.probe_device(dev) {
         Ok(found) => {
             debug!("dev {dev}: {:?}", found.device);
@@ -182,14 +186,20 @@ fn probe(rcv: &mut Receiver, state: &mut State, battery_idx: &mut HashMap<u8, u8
                 battery_idx.insert(dev, idx);
             }
             notify(state.upsert(found.device));
+            Ok(true)
         }
         Err(ReqError::Io(e)) => return Err(e),
         Err(e) => {
             debug!("dev {dev} unreachable: {e}");
             state.set_online(dev, false);
+            Ok(false)
         }
     }
-    Ok(())
+}
+
+/// When the next poll is due after a link-up probe; pulled forward if the device did not answer.
+fn poll_after_link_up(reachable: bool, now: Instant, next_poll: Instant) -> Instant {
+    if reachable { next_poll } else { next_poll.min(now + LINK_RETRY) }
 }
 
 fn notify(alerts: Vec<Alert>) {
@@ -204,5 +214,31 @@ fn notify(alerts: Vec<Alert>) {
         if let Err(e) = shown {
             warn!("cannot show notification: {e}");
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn unreachable_link_up_pulls_poll_forward() {
+        let now = Instant::now();
+        let later = now + POLL_INTERVAL;
+        assert_eq!(poll_after_link_up(false, now, later), now + LINK_RETRY);
+    }
+
+    #[test]
+    fn reachable_link_up_keeps_schedule() {
+        let now = Instant::now();
+        let later = now + POLL_INTERVAL;
+        assert_eq!(poll_after_link_up(true, now, later), later);
+    }
+
+    #[test]
+    fn retry_never_delays_an_earlier_poll() {
+        let now = Instant::now();
+        let soon = now + Duration::from_secs(1);
+        assert_eq!(poll_after_link_up(false, now, soon), soon);
     }
 }
