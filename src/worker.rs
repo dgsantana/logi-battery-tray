@@ -9,7 +9,7 @@ use std::time::{Duration, Instant};
 use hidapi::HidApi;
 use log::{debug, info, warn};
 
-use crate::hidpp::{self, Message};
+use crate::hidpp::{self, BatteryStatus, Message};
 use crate::state::{Alert, State};
 use crate::transport::{self, Candidate, ReqError, Transport};
 use crate::tray::{self, Cmd, Snapshot};
@@ -185,28 +185,58 @@ fn rediscover(links: &mut Vec<Link>, state: &mut State) -> bool {
     changed
 }
 
+/// What an incoming message asks the worker to do.
+#[derive(Debug, PartialEq, Eq)]
+enum EventAction {
+    Battery { dev: u8, battery: BatteryStatus },
+    LinkUp(u8),
+    LinkDown(u8),
+    /// A device we have no battery feature for spoke: probe it. BLE links send
+    /// no connection notifications, so this is how a waking device is noticed.
+    Wake(u8),
+    Ignore,
+}
+
+fn classify_event(msg: Option<Message>, battery_idx: &HashMap<u8, u8>) -> EventAction {
+    match msg {
+        Some(Message::Event { dev, feat_idx, func, data }) => match battery_idx.get(&dev) {
+            None => EventAction::Wake(dev),
+            Some(&idx) if idx == feat_idx && func == 0 => {
+                hidpp::parse_battery(&data).map_or(EventAction::Ignore, |battery| EventAction::Battery { dev, battery })
+            }
+            Some(_) => EventAction::Ignore,
+        },
+        Some(Message::Connection { dev, linked: true }) => EventAction::LinkUp(dev),
+        Some(Message::Connection { dev, linked: false }) => EventAction::LinkDown(dev),
+        _ => EventAction::Ignore,
+    }
+}
+
 /// Wait for one event on a link and apply it. Returns whether state changed.
 fn handle_event(link: &mut Link, state: &mut State, alerts: &mut Vec<Alert>, wait: Duration) -> io::Result<bool> {
-    match link.transport.next_event(wait)? {
-        Some(Message::Event { dev, feat_idx, func: 0, data }) if link.battery_idx.get(&dev) == Some(&feat_idx) => {
-            let Some(battery) = hidpp::parse_battery(&data) else { return Ok(false) };
+    match classify_event(link.transport.next_event(wait)?, &link.battery_idx) {
+        EventAction::Battery { dev, battery } => {
             debug!("battery event dev {dev}: {battery:?}");
             alerts.extend(state.set_battery(&link.transport.key(dev), battery));
-            Ok(true)
         }
-        Some(Message::Connection { dev, linked }) => {
-            debug!("dev {dev} link {}", if linked { "up" } else { "down" });
+        EventAction::LinkUp(dev) => {
+            debug!("dev {dev} link up");
             link.battery_idx.remove(&dev);
-            if linked {
-                let reachable = probe(link, state, alerts, dev)?;
-                link.next_poll = poll_after_link_up(reachable, Instant::now(), link.next_poll);
-            } else {
-                state.set_online(&link.transport.key(dev), false);
-            }
-            Ok(true)
+            let reachable = probe(link, state, alerts, dev)?;
+            link.next_poll = poll_after_link_up(reachable, Instant::now(), link.next_poll);
         }
-        _ => Ok(false),
+        EventAction::LinkDown(dev) => {
+            debug!("dev {dev} link down");
+            link.battery_idx.remove(&dev);
+            state.set_online(&link.transport.key(dev), false);
+        }
+        EventAction::Wake(dev) => {
+            debug!("event from unprobed dev {dev}, probing");
+            probe(link, state, alerts, dev)?;
+        }
+        EventAction::Ignore => return Ok(false),
     }
+    Ok(true)
 }
 
 /// Re-read a known device's battery, or probe it from scratch.
@@ -309,5 +339,38 @@ mod tests {
         let (to_open, to_drop) = reconcile(&open, &found);
         assert_eq!(to_drop, ["r"]);
         assert_eq!(to_open, [found[0].clone()]);
+    }
+
+    fn known(dev: u8, idx: u8) -> HashMap<u8, u8> {
+        HashMap::from([(dev, idx)])
+    }
+
+    fn event(dev: u8, feat_idx: u8, func: u8) -> Option<Message> {
+        Some(Message::Event { dev, feat_idx, func, data: vec![50, 4, 0, 0] })
+    }
+
+    #[test]
+    fn battery_event_from_known_device_updates_battery() {
+        assert!(matches!(classify_event(event(2, 6, 0), &known(2, 6)), EventAction::Battery { dev: 2, .. }));
+    }
+
+    #[test]
+    fn any_event_from_unknown_device_wakes_it() {
+        assert_eq!(classify_event(event(0xFF, 3, 0), &HashMap::new()), EventAction::Wake(0xFF));
+    }
+
+    #[test]
+    fn other_events_from_known_device_are_ignored() {
+        assert_eq!(classify_event(event(2, 9, 0), &known(2, 6)), EventAction::Ignore);
+        assert_eq!(classify_event(event(2, 6, 1), &known(2, 6)), EventAction::Ignore);
+        assert_eq!(classify_event(None, &known(2, 6)), EventAction::Ignore);
+    }
+
+    #[test]
+    fn connection_notifications_map_to_link_changes() {
+        let up = Some(Message::Connection { dev: 3, linked: true });
+        let down = Some(Message::Connection { dev: 3, linked: false });
+        assert_eq!(classify_event(up, &HashMap::new()), EventAction::LinkUp(3));
+        assert_eq!(classify_event(down, &known(3, 6)), EventAction::LinkDown(3));
     }
 }

@@ -10,17 +10,20 @@ use crate::tray;
 pub const SIZE: u32 = 32;
 
 const OUTLINE: [u8; 3] = [0xF0, 0xF0, 0xF0];
+/// Outer edge of the outline, so the light outline also shows on light taskbars.
+const OUTLINE_DARK: [u8; 3] = [0x30, 0x30, 0x30];
 const FILL_OK: [u8; 3] = [0x3C, 0xC8, 0x50];
 const FILL_LOW: [u8; 3] = [0xE0, 0x40, 0x40];
 const BOLT: [u8; 3] = [0xFF, 0xD7, 0x00];
-const MISSING: [u8; 3] = [0xA0, 0xA0, 0xA0];
+const MISSING: [u8; 3] = [0xE8, 0xE8, 0xE8];
 /// Dimmed interior so the empty part shows on light and dark taskbars.
 const INTERIOR: [u8; 4] = [0x00, 0x00, 0x00, 0x60];
 
 /// Body (x0, y0, x1, y1), end-exclusive; the terminal nub sits on top.
 const BODY: (u32, u32, u32, u32) = (7, 5, 25, 31);
 const NUB: (u32, u32, u32, u32) = (12, 2, 20, 5);
-const BORDER: u32 = 2;
+/// Outline thickness: one dark edge pixel plus two light ones.
+const BORDER: u32 = 3;
 /// Charging bolt outline, in pixel coordinates.
 const BOLT_SHAPE: [(f32, f32); 6] = [(17.0, 8.0), (10.0, 19.0), (15.0, 19.0), (13.0, 28.0), (22.0, 16.0), (17.0, 16.0)];
 
@@ -31,6 +34,15 @@ fn inside((x0, y0, x1, y1): (u32, u32, u32, u32), x: u32, y: u32) -> bool {
 /// Whether a pixel belongs to the battery drawing at all.
 fn in_shape(x: u32, y: u32) -> bool {
     inside(BODY, x, y) || inside(NUB, x, y)
+}
+
+/// Shape pixels with a 4-neighbour outside the shape.
+fn on_edge(x: u32, y: u32) -> bool {
+    let outside = |dx: i32, dy: i32| match (x.checked_add_signed(dx), y.checked_add_signed(dy)) {
+        (Some(nx), Some(ny)) => !in_shape(nx, ny),
+        _ => true,
+    };
+    outside(-1, 0) || outside(1, 0) || outside(0, -1) || outside(0, 1)
 }
 
 fn interior() -> (u32, u32, u32, u32) {
@@ -75,7 +87,9 @@ pub fn render(lowest: Option<BatteryStatus>) -> Vec<u8> {
             if !in_shape(x, y) {
                 continue;
             }
-            let rgba = if !inside(interior(), x, y) {
+            let rgba = if on_edge(x, y) {
+                opaque(OUTLINE_DARK)
+            } else if !inside(interior(), x, y) {
                 opaque(OUTLINE)
             } else if charging && in_bolt(x, y) {
                 opaque(BOLT)
@@ -169,5 +183,15 @@ mod tests {
     fn any_charge_left_shows_a_red_sliver() {
         assert!(count(&render(batt(5, ChargingState::Discharging)), FILL_LOW) > 0);
         assert_eq!(fill(&render(batt(0, ChargingState::Discharging))), 0);
+    }
+
+    #[test]
+    fn outline_has_a_dark_edge_for_light_taskbars() {
+        let px = render(batt(50, ChargingState::Discharging));
+        assert!(count(&px, OUTLINE_DARK) > 0);
+        assert!(count(&px, OUTLINE) > 0);
+        // outermost body pixel is the dark edge
+        let at = ((BODY.1 + 10) * SIZE + BODY.0) as usize * 4;
+        assert_eq!(px[at..at + 3], OUTLINE_DARK);
     }
 }

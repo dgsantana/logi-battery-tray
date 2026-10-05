@@ -1,7 +1,7 @@
 [Desktop Entry]
 Type=Application
 Name=Logitech Battery Tray
-Comment=Battery levels of devices on a Logi Bolt receiver
+Comment=Battery levels of Logitech devices (Bolt receiver or Bluetooth LE)
 Exec=logi-battery-tray
 Icon=logi-battery-tray
 Categories=Utility;

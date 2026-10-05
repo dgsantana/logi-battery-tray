@@ -37,6 +37,12 @@ icon:
 install autostart="true":
     set -euo pipefail
     cargo install --path . --locked
+    # Restart a running tray on the new binary (the old one would hold the
+    # single-instance lock). The process name is truncated to 15 chars.
+    if pkill -x -u "$USER" logi-battery-tr; then
+        while pgrep -x -u "$USER" logi-battery-tr >/dev/null; do sleep 0.1; done
+        setsid -f "${CARGO_HOME:-$HOME/.cargo}/bin/logi-battery-tray" >/dev/null 2>&1
+    fi
     data="${XDG_DATA_HOME:-$HOME/.local/share}"
     config="${XDG_CONFIG_HOME:-$HOME/.config}"
     install -Dm644 packaging/logi-battery-tray.desktop "$data/applications/logi-battery-tray.desktop"
@@ -59,6 +65,7 @@ uninstall:
     set -euo pipefail
     data="${XDG_DATA_HOME:-$HOME/.local/share}"
     config="${XDG_CONFIG_HOME:-$HOME/.config}"
+    pkill -x -u "$USER" logi-battery-tr || true
     cargo uninstall logi-battery-tray || true
     rm -f "$data/applications/logi-battery-tray.desktop" \
         "$data/icons/hicolor/scalable/apps/logi-battery-tray.svg" \

@@ -35,7 +35,8 @@ for more detail).
 ## Use
 
     logi-battery-tray            # tray icon
-    logi-battery-tray --once     # print levels and exit
+    logi-battery-tray --once     # print levels and exit (Windows: output may
+                                 # appear after the PowerShell prompt; `just once` waits)
     RUST_LOG=debug logi-battery-tray
 
 ## Develop
