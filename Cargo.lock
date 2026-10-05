@@ -648,6 +648,7 @@ dependencies = [
  "libc",
  "log",
  "notify-rust",
+ "windows-sys",
 ]
 
 [[package]]
