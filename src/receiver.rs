@@ -108,6 +108,10 @@ impl Receiver {
         Ok(Self { file, id: path.display().to_string(), pending: VecDeque::new() })
     }
 
+    pub fn id(&self) -> &str {
+        &self.id
+    }
+
     pub fn key(&self, index: u8) -> DeviceKey {
         DeviceKey { transport: self.id.clone(), index }
     }

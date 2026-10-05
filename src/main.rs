@@ -82,6 +82,7 @@ fn run(cmds: &mpsc::Receiver<Cmd>, publish: impl Fn(&State, bool)) {
         let mut rcv = match opened {
             Some((Ok(rcv), path)) => {
                 info!("using receiver at {}", path.display());
+                state.set_present(&path.display().to_string(), true);
                 rcv
             }
             Some((Err(e), path)) => {
@@ -99,7 +100,8 @@ fn run(cmds: &mpsc::Receiver<Cmd>, publish: impl Fn(&State, bool)) {
             Ok(()) => return,
             Err(e) => {
                 warn!("lost receiver: {e}");
-                publish(&state, false);
+                state.set_present(rcv.id(), false);
+                publish(&state, state.any_present());
             }
         }
     }
