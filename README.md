@@ -14,7 +14,8 @@ Access comes from the logind `uaccess` ACL on the receiver's hidraw nodes.
 ## Install
 
     cargo install --path .
-    cp packaging/logi-battery-tray.desktop ~/.config/autostart/
+    cp packaging/logi-battery-tray.desktop ~/.local/share/applications/  # launcher
+    cp packaging/logi-battery-tray.desktop ~/.config/autostart/          # start at login
 
 ## Use
 
