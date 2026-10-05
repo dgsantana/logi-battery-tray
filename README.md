@@ -23,6 +23,15 @@ Access comes from the logind `uaccess` ACL on the receiver's hidraw nodes.
     logi-battery-tray --once     # print levels and exit
     RUST_LOG=debug logi-battery-tray
 
+## Develop
+
+Recipes use [just](https://github.com/casey/just):
+
+    just test     # cargo test
+    just lint     # clippy, warnings are errors
+    just once     # run --once from source
+    just build    # release build
+
 ## License
 
 Licensed under either of [Apache License, Version 2.0](LICENSE-APACHE) or [MIT license](LICENSE-MIT) at your option.
