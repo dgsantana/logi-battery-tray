@@ -1,15 +1,13 @@
-//! StatusNotifierItem tray rendering.
+//! Tray content shared by every platform: text, levels, snapshots.
 
-use std::sync::mpsc::Sender;
-
-use ksni::menu::{MenuItem, StandardItem};
-use ksni::{Category, ToolTip};
-
-use crate::hidpp::{BatteryStatus, ChargingState, DeviceKind};
+use crate::hidpp::{BatteryStatus, ChargingState};
 use crate::state::{Device, State};
 
+// Used by the Windows tray once it lands (Task 8).
+#[cfg_attr(windows, allow(dead_code))]
 pub const TITLE: &str = "Logitech batteries";
 
+#[cfg_attr(windows, allow(dead_code))]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Cmd {
     Refresh,
@@ -31,17 +29,16 @@ impl Snapshot {
     }
 }
 
-pub struct BatteryTray {
-    pub devices: Vec<Device>,
-    pub lowest: Option<BatteryStatus>,
-    pub present: bool,
-    pub tx: Sender<Cmd>,
+/// Battery percent rounded down to tens, as icons show it.
+pub fn level(b: BatteryStatus) -> u8 {
+    b.percent / 10 * 10
 }
 
 /// Breeze status icon for the lowest battery.
+#[cfg_attr(not(target_os = "linux"), allow(dead_code))]
 pub fn icon_for(lowest: Option<BatteryStatus>) -> String {
     let Some(b) = lowest else { return "battery-missing".into() };
-    let level = b.percent / 10 * 10;
+    let level = level(b);
     match b.charging {
         ChargingState::Charging | ChargingState::Full => format!("battery-{level:03}-charging"),
         ChargingState::Discharging | ChargingState::Error => format!("battery-{level:03}"),
@@ -78,89 +75,10 @@ pub fn summary(devices: &[Device], present: bool) -> String {
     devices.iter().map(device_line).collect::<Vec<_>>().join("\n")
 }
 
-impl ksni::Tray for BatteryTray {
-    fn id(&self) -> String {
-        env!("CARGO_PKG_NAME").into()
-    }
-
-    fn title(&self) -> String {
-        TITLE.into()
-    }
-
-    fn category(&self) -> Category {
-        Category::Hardware
-    }
-
-    fn icon_name(&self) -> String {
-        icon_for(self.lowest.filter(|_| self.present))
-    }
-
-    fn tool_tip(&self) -> ToolTip {
-        ToolTip {
-            icon_name: self.icon_name(),
-            title: TITLE.into(),
-            description: summary(&self.devices, self.present),
-            ..Default::default()
-        }
-    }
-
-    fn menu(&self) -> Vec<MenuItem<Self>> {
-        let mut items: Vec<MenuItem<Self>> = if self.devices.is_empty() || !self.present {
-            vec![StandardItem {
-                label: summary(&self.devices, self.present),
-                enabled: false,
-                ..Default::default()
-            }
-            .into()]
-        } else {
-            self.devices
-                .iter()
-                .map(|d| {
-                    StandardItem {
-                        label: device_line(d),
-                        enabled: false,
-                        icon_name: match d.kind {
-                            DeviceKind::Keyboard => "input-keyboard",
-                            DeviceKind::Mouse => "input-mouse",
-                            DeviceKind::Other => "input-gaming",
-                        }
-                        .into(),
-                        ..Default::default()
-                    }
-                    .into()
-                })
-                .collect()
-        };
-        items.push(MenuItem::Separator);
-        items.push(
-            StandardItem {
-                label: "Refresh".into(),
-                icon_name: "view-refresh".into(),
-                activate: Box::new(|t: &mut Self| {
-                    let _ = t.tx.send(Cmd::Refresh);
-                }),
-                ..Default::default()
-            }
-            .into(),
-        );
-        items.push(
-            StandardItem {
-                label: "Quit".into(),
-                icon_name: "application-exit".into(),
-                activate: Box::new(|t: &mut Self| {
-                    let _ = t.tx.send(Cmd::Quit);
-                }),
-                ..Default::default()
-            }
-            .into(),
-        );
-        items
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::hidpp::DeviceKind;
     use crate::state::DeviceKey;
 
     fn batt(percent: u8, charging: ChargingState) -> Option<BatteryStatus> {
@@ -187,6 +105,14 @@ mod tests {
     }
 
     #[test]
+    fn level_rounds_down_to_tens() {
+        let level = |p| level(BatteryStatus { percent: p, charging: ChargingState::Discharging });
+        assert_eq!(level(95), 90);
+        assert_eq!(level(100), 100);
+        assert_eq!(level(5), 0);
+    }
+
+    #[test]
     fn icon_missing_without_reading() {
         assert_eq!(icon_for(None), "battery-missing");
     }
@@ -200,31 +126,6 @@ mod tests {
         assert_eq!(device_line(&dev("MX Keys S", batt(100, ChargingState::Discharging), false)), "MX Keys S — offline (last 100%)");
         assert_eq!(device_line(&dev("M", None, false)), "M — offline");
         assert_eq!(device_line(&dev("M", None, true)), "M — battery unknown");
-    }
-
-    fn menu_labels(tray: &BatteryTray) -> Vec<String> {
-        use ksni::Tray;
-        tray.menu()
-            .into_iter()
-            .filter_map(|i| match i {
-                MenuItem::Standard(s) => Some(s.label),
-                _ => None,
-            })
-            .collect()
-    }
-
-    #[test]
-    fn menu_hides_stale_devices_without_receiver() {
-        let (tx, _rx) = std::sync::mpsc::channel();
-        let mut tray = BatteryTray {
-            devices: vec![dev("A", batt(50, ChargingState::Discharging), true)],
-            lowest: batt(50, ChargingState::Discharging),
-            present: true,
-            tx,
-        };
-        assert_eq!(menu_labels(&tray), ["A — 50%", "Refresh", "Quit"]);
-        tray.present = false;
-        assert_eq!(menu_labels(&tray), ["No Logitech devices found", "Refresh", "Quit"]);
     }
 
     #[test]

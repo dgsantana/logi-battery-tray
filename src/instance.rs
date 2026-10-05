@@ -80,14 +80,17 @@ mod windows {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[cfg(target_os = "linux")]
     use std::path::PathBuf;
 
+    #[cfg(target_os = "linux")]
     fn temp_dir(name: &str) -> PathBuf {
         let dir = std::env::temp_dir().join(format!("logi-battery-tray-test-{name}-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
         dir
     }
 
+    #[cfg(target_os = "linux")]
     #[test]
     fn second_acquire_fails_while_first_is_held() {
         let dir = temp_dir("held");
@@ -96,6 +99,7 @@ mod tests {
         assert!(acquire_in(&dir).unwrap().is_none());
     }
 
+    #[cfg(target_os = "linux")]
     #[test]
     fn acquire_succeeds_again_after_release() {
         let dir = temp_dir("release");
@@ -104,6 +108,7 @@ mod tests {
         assert!(acquire_in(&dir).unwrap().is_some());
     }
 
+    #[cfg(target_os = "linux")]
     #[test]
     fn missing_directory_is_an_error() {
         let dir = temp_dir("missing").join("does-not-exist");
