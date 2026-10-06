@@ -9,7 +9,8 @@ use hidapi::{HidApi, HidDevice};
 use log::debug;
 
 use crate::hidpp::{
-    self, BatteryStatus, DeviceKind, Message, FEATURE_DEVICE_NAME, FEATURE_UNIFIED_BATTERY, SWID,
+    self, BatteryFeature, BatteryStatus, DeviceKind, Message, FEATURE_BATTERY_STATUS, FEATURE_DEVICE_NAME,
+    FEATURE_UNIFIED_BATTERY, SWID,
 };
 use crate::state::{Device, DeviceKey};
 
@@ -68,8 +69,8 @@ impl std::fmt::Display for ReqError {
 #[derive(Debug)]
 pub struct Probe {
     pub device: Device,
-    /// Feature index of UNIFIED_BATTERY, if the device has it.
-    pub battery_idx: Option<u8>,
+    /// Battery feature, if the device has one we can read.
+    pub battery_feature: Option<BatteryFeature>,
 }
 
 /// Which kind of transport a HID interface is, if any.
@@ -295,9 +296,17 @@ impl Transport {
         Ok(hidpp::parse_feature_index(&data))
     }
 
-    pub fn read_battery(&mut self, dev: u8, battery_idx: u8) -> Result<BatteryStatus, ReqError> {
-        let data = self.request(dev, battery_idx, 1, &[])?;
-        hidpp::parse_battery(&data).ok_or(ReqError::Malformed)
+    pub fn read_battery(&mut self, dev: u8, feature: BatteryFeature) -> Result<BatteryStatus, ReqError> {
+        let data = self.request(dev, feature.index(), feature.read_func(), &[])?;
+        feature.parse(&data).ok_or(ReqError::Malformed)
+    }
+
+    /// UNIFIED_BATTERY if the device has it, else BATTERY_STATUS.
+    fn battery_feature(&mut self, dev: u8) -> Result<Option<BatteryFeature>, ReqError> {
+        if let Some(idx) = self.feature_index(dev, FEATURE_UNIFIED_BATTERY)? {
+            return Ok(Some(BatteryFeature::Unified(idx)));
+        }
+        Ok(self.feature_index(dev, FEATURE_BATTERY_STATUS)?.map(BatteryFeature::Status))
     }
 
     fn read_name(&mut self, dev: u8, name_idx: u8) -> Result<(String, DeviceKind), ReqError> {
@@ -320,12 +329,12 @@ impl Transport {
             Some(idx) => self.read_name(dev, idx)?,
             None => (format!("Device {dev}"), DeviceKind::Other),
         };
-        let battery_idx = self.feature_index(dev, FEATURE_UNIFIED_BATTERY)?;
-        let battery = match battery_idx {
-            Some(idx) => Some(self.read_battery(dev, idx)?),
+        let battery_feature = self.battery_feature(dev)?;
+        let battery = match battery_feature {
+            Some(feature) => Some(self.read_battery(dev, feature)?),
             None => None,
         };
-        Ok(Probe { device: Device { key: self.key(dev), name, kind, battery, online: true }, battery_idx })
+        Ok(Probe { device: Device { key: self.key(dev), name, kind, battery, online: true }, battery_feature })
     }
 }
 

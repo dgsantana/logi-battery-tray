@@ -9,7 +9,7 @@ use std::time::{Duration, Instant};
 use hidapi::HidApi;
 use log::{debug, info, warn};
 
-use crate::hidpp::{self, BatteryStatus, Message};
+use crate::hidpp::{BatteryFeature, BatteryStatus, Message};
 use crate::state::{Alert, State};
 use crate::transport::{self, Candidate, ReqError, Transport};
 use crate::tray::{self, Cmd, Snapshot};
@@ -26,8 +26,8 @@ struct Link {
     /// What was opened, to notice when its collections change.
     candidate: Candidate,
     transport: Transport,
-    /// Feature index of UNIFIED_BATTERY per online device.
-    battery_idx: HashMap<u8, u8>,
+    /// Battery feature per online device.
+    battery: HashMap<u8, BatteryFeature>,
     next_poll: Instant,
 }
 
@@ -64,7 +64,7 @@ pub fn run_once() -> ExitCode {
         let mut link = match Transport::open(&api, candidate) {
             Ok(t) => {
                 state.set_present(&candidate.id, true);
-                Link { candidate: candidate.clone(), transport: t, battery_idx: HashMap::new(), next_poll: Instant::now() }
+                Link { candidate: candidate.clone(), transport: t, battery: HashMap::new(), next_poll: Instant::now() }
             }
             Err(e) => {
                 eprintln!("cannot open {}: {e}", candidate.id);
@@ -176,7 +176,7 @@ fn rediscover(links: &mut Vec<Link>, state: &mut State) -> bool {
             Ok(transport) => {
                 info!("using {:?} transport {}", candidate.kind, candidate.id);
                 state.set_present(&candidate.id, true);
-                links.push(Link { candidate, transport, battery_idx: HashMap::new(), next_poll: Instant::now() });
+                links.push(Link { candidate, transport, battery: HashMap::new(), next_poll: Instant::now() });
                 changed = true;
             }
             Err(e) => debug!("cannot open {}: {e}", candidate.id),
@@ -197,12 +197,12 @@ enum EventAction {
     Ignore,
 }
 
-fn classify_event(msg: Option<Message>, battery_idx: &HashMap<u8, u8>) -> EventAction {
+fn classify_event(msg: Option<Message>, battery: &HashMap<u8, BatteryFeature>) -> EventAction {
     match msg {
-        Some(Message::Event { dev, feat_idx, func, data }) => match battery_idx.get(&dev) {
+        Some(Message::Event { dev, feat_idx, func, data }) => match battery.get(&dev) {
             None => EventAction::Wake(dev),
-            Some(&idx) if idx == feat_idx && func == 0 => {
-                hidpp::parse_battery(&data).map_or(EventAction::Ignore, |battery| EventAction::Battery { dev, battery })
+            Some(&feature) if feature.index() == feat_idx && func == 0 => {
+                feature.parse(&data).map_or(EventAction::Ignore, |battery| EventAction::Battery { dev, battery })
             }
             Some(_) => EventAction::Ignore,
         },
@@ -214,20 +214,20 @@ fn classify_event(msg: Option<Message>, battery_idx: &HashMap<u8, u8>) -> EventA
 
 /// Wait for one event on a link and apply it. Returns whether state changed.
 fn handle_event(link: &mut Link, state: &mut State, alerts: &mut Vec<Alert>, wait: Duration) -> io::Result<bool> {
-    match classify_event(link.transport.next_event(wait)?, &link.battery_idx) {
+    match classify_event(link.transport.next_event(wait)?, &link.battery) {
         EventAction::Battery { dev, battery } => {
             debug!("battery event dev {dev}: {battery:?}");
             alerts.extend(state.set_battery(&link.transport.key(dev), battery));
         }
         EventAction::LinkUp(dev) => {
             debug!("dev {dev} link up");
-            link.battery_idx.remove(&dev);
+            link.battery.remove(&dev);
             let reachable = probe(link, state, alerts, dev)?;
             link.next_poll = poll_after_link_up(reachable, Instant::now(), link.next_poll);
         }
         EventAction::LinkDown(dev) => {
             debug!("dev {dev} link down");
-            link.battery_idx.remove(&dev);
+            link.battery.remove(&dev);
             state.set_online(&link.transport.key(dev), false);
         }
         EventAction::Wake(dev) => {
@@ -241,15 +241,15 @@ fn handle_event(link: &mut Link, state: &mut State, alerts: &mut Vec<Alert>, wai
 
 /// Re-read a known device's battery, or probe it from scratch.
 fn refresh(link: &mut Link, state: &mut State, alerts: &mut Vec<Alert>, dev: u8) -> io::Result<()> {
-    let Some(&idx) = link.battery_idx.get(&dev) else {
+    let Some(&feature) = link.battery.get(&dev) else {
         return probe(link, state, alerts, dev).map(drop);
     };
-    match link.transport.read_battery(dev, idx) {
+    match link.transport.read_battery(dev, feature) {
         Ok(battery) => alerts.extend(state.set_battery(&link.transport.key(dev), battery)),
         Err(ReqError::Io(e)) => return Err(e),
         Err(e) => {
             debug!("dev {dev} unreachable: {e}");
-            link.battery_idx.remove(&dev);
+            link.battery.remove(&dev);
             state.set_online(&link.transport.key(dev), false);
         }
     }
@@ -262,8 +262,8 @@ fn probe(link: &mut Link, state: &mut State, alerts: &mut Vec<Alert>, dev: u8) -
     match link.transport.probe_device(dev) {
         Ok(found) => {
             debug!("dev {dev}: {:?}", found.device);
-            if let Some(idx) = found.battery_idx {
-                link.battery_idx.insert(dev, idx);
+            if let Some(feature) = found.battery_feature {
+                link.battery.insert(dev, feature);
             }
             alerts.extend(state.upsert(found.device));
             Ok(true)
@@ -285,6 +285,7 @@ fn poll_after_link_up(reachable: bool, now: Instant, next_poll: Instant) -> Inst
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::hidpp::ChargingState;
     use crate::transport::{HidPath, Kind};
 
     fn cand(id: &str) -> Candidate {
@@ -341,8 +342,8 @@ mod tests {
         assert_eq!(to_open, [found[0].clone()]);
     }
 
-    fn known(dev: u8, idx: u8) -> HashMap<u8, u8> {
-        HashMap::from([(dev, idx)])
+    fn known(dev: u8, idx: u8) -> HashMap<u8, BatteryFeature> {
+        HashMap::from([(dev, BatteryFeature::Unified(idx))])
     }
 
     fn event(dev: u8, feat_idx: u8, func: u8) -> Option<Message> {
@@ -352,6 +353,14 @@ mod tests {
     #[test]
     fn battery_event_from_known_device_updates_battery() {
         assert!(matches!(classify_event(event(2, 6, 0), &known(2, 6)), EventAction::Battery { dev: 2, .. }));
+    }
+
+    #[test]
+    fn battery_status_event_uses_its_own_layout() {
+        let feature = HashMap::from([(0xFF, BatteryFeature::Status(8))]);
+        let msg = Some(Message::Event { dev: 0xFF, feat_idx: 8, func: 0, data: vec![50, 20, 1] });
+        let EventAction::Battery { battery, .. } = classify_event(msg, &feature) else { panic!() };
+        assert_eq!((battery.percent, battery.charging), (50, ChargingState::Charging));
     }
 
     #[test]

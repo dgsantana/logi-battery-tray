@@ -9,6 +9,7 @@ pub const LONG_LEN: usize = 20;
 pub const SWID: u8 = 0x0A;
 
 pub const FEATURE_DEVICE_NAME: u16 = 0x0005;
+pub const FEATURE_BATTERY_STATUS: u16 = 0x1000;
 pub const FEATURE_UNIFIED_BATTERY: u16 = 0x1004;
 
 /// HID++ 1.0 sub-id for the receiver's device connection notification.
@@ -43,6 +44,40 @@ pub enum ChargingState {
 pub struct BatteryStatus {
     pub percent: u8,
     pub charging: ChargingState,
+}
+
+/// Battery feature a device exposes, with its index in the device's feature table.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum BatteryFeature {
+    /// UNIFIED_BATTERY (0x1004): newer devices.
+    Unified(u8),
+    /// BATTERY_STATUS (0x1000): older devices, e.g. MX Vertical.
+    Status(u8),
+}
+
+impl BatteryFeature {
+    pub fn index(self) -> u8 {
+        match self {
+            Self::Unified(idx) | Self::Status(idx) => idx,
+        }
+    }
+
+    /// Function that reads the current level.
+    pub fn read_func(self) -> u8 {
+        match self {
+            Self::Unified(_) => 1,
+            Self::Status(_) => 0,
+        }
+    }
+
+    /// Decode a read reply or a battery event (function 0); each feature
+    /// uses one payload layout for both.
+    pub fn parse(self, data: &[u8]) -> Option<BatteryStatus> {
+        match self {
+            Self::Unified(_) => parse_battery(data),
+            Self::Status(_) => parse_battery_status(data),
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -107,6 +142,23 @@ pub fn parse_battery(data: &[u8]) -> Option<BatteryStatus> {
     let charging = match code {
         0 => ChargingState::Discharging,
         1 | 2 => ChargingState::Charging,
+        3 => ChargingState::Full,
+        _ => ChargingState::Error,
+    };
+    Some(BatteryStatus { percent, charging })
+}
+
+/// Decode BATTERY_STATUS get_level reply / battery event payload:
+/// level %, next level %, status.
+pub fn parse_battery_status(data: &[u8]) -> Option<BatteryStatus> {
+    let (&percent, &code) = (data.first()?, data.get(2)?);
+    if percent > 100 {
+        return None;
+    }
+    let charging = match code {
+        0 => ChargingState::Discharging,
+        // recharging, almost full, slow recharge
+        1 | 2 | 4 => ChargingState::Charging,
         3 => ChargingState::Full,
         _ => ChargingState::Error,
     };
@@ -198,6 +250,38 @@ mod tests {
     fn battery_rejects_short_or_bogus_payload() {
         assert_eq!(parse_battery(&[50, 4]), None);
         assert_eq!(parse_battery(&[101, 8, 0]), None);
+    }
+
+    #[test]
+    fn parses_battery_status_level() {
+        // probe: MX Vertical over BLE, BATTERY_STATUS get_level at index 8
+        let m = parse(&hex("11 ff 08 0a 32 14 00 00 00 00 00 00 00 00 00 00 00 00 00 00")).unwrap();
+        let Message::Reply { func: 0, data, .. } = m else { panic!("{m:?}") };
+        assert_eq!(
+            BatteryFeature::Status(8).parse(&data),
+            Some(BatteryStatus { percent: 50, charging: ChargingState::Discharging })
+        );
+    }
+
+    #[test]
+    fn battery_status_codes() {
+        assert_eq!(parse_battery_status(&[50, 20, 1]).unwrap().charging, ChargingState::Charging);
+        assert_eq!(parse_battery_status(&[90, 50, 2]).unwrap().charging, ChargingState::Charging);
+        assert_eq!(parse_battery_status(&[100, 90, 3]).unwrap().charging, ChargingState::Full);
+        assert_eq!(parse_battery_status(&[30, 20, 4]).unwrap().charging, ChargingState::Charging);
+        assert_eq!(parse_battery_status(&[30, 20, 6]).unwrap().charging, ChargingState::Error);
+    }
+
+    #[test]
+    fn battery_status_rejects_short_or_bogus_payload() {
+        assert_eq!(parse_battery_status(&[50, 20]), None);
+        assert_eq!(parse_battery_status(&[101, 20, 0]), None);
+    }
+
+    #[test]
+    fn battery_features_read_with_their_own_function() {
+        assert_eq!(BatteryFeature::Unified(8).read_func(), 1);
+        assert_eq!(BatteryFeature::Status(8).read_func(), 0);
     }
 
     #[test]
