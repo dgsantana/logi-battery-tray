@@ -9,6 +9,7 @@ pub const LONG_LEN: usize = 20;
 pub const SWID: u8 = 0x0A;
 
 pub const FEATURE_DEVICE_NAME: u16 = 0x0005;
+pub const FEATURE_BATTERY_STATUS: u16 = 0x1000;
 pub const FEATURE_UNIFIED_BATTERY: u16 = 0x1004;
 
 /// HID++ 1.0 sub-id for the receiver's device connection notification.
@@ -45,6 +46,40 @@ pub struct BatteryStatus {
     pub charging: ChargingState,
 }
 
+/// Battery feature a device exposes, with its index in the device's feature table.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum BatteryFeature {
+    /// UNIFIED_BATTERY (0x1004): newer devices.
+    Unified(u8),
+    /// BATTERY_STATUS (0x1000): older devices, e.g. MX Vertical.
+    Status(u8),
+}
+
+impl BatteryFeature {
+    pub fn index(self) -> u8 {
+        match self {
+            Self::Unified(idx) | Self::Status(idx) => idx,
+        }
+    }
+
+    /// Function that reads the current level.
+    pub fn read_func(self) -> u8 {
+        match self {
+            Self::Unified(_) => 1,
+            Self::Status(_) => 0,
+        }
+    }
+
+    /// Decode a read reply or a battery event (function 0); each feature
+    /// uses one payload layout for both.
+    pub fn parse(self, data: &[u8]) -> Option<BatteryStatus> {
+        match self {
+            Self::Unified(_) => parse_battery(data),
+            Self::Status(_) => parse_battery_status(data),
+        }
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum DeviceKind {
     Keyboard,
@@ -56,6 +91,15 @@ pub enum DeviceKind {
 pub fn request(dev: u8, feat_idx: u8, func: u8, params: &[u8]) -> [u8; SHORT_LEN] {
     assert!(params.len() <= SHORT_LEN - 4, "too many params for short report");
     let mut buf = [REPORT_SHORT, dev, feat_idx, (func << 4) | SWID, 0, 0, 0];
+    buf[4..4 + params.len()].copy_from_slice(params);
+    buf
+}
+
+/// Build a long request, for links that only accept long reports (BLE).
+pub fn request_long(dev: u8, feat_idx: u8, func: u8, params: &[u8]) -> [u8; LONG_LEN] {
+    assert!(params.len() <= LONG_LEN - 4, "too many params for long report");
+    let mut buf = [0; LONG_LEN];
+    buf[..4].copy_from_slice(&[REPORT_LONG, dev, feat_idx, (func << 4) | SWID]);
     buf[4..4 + params.len()].copy_from_slice(params);
     buf
 }
@@ -104,6 +148,23 @@ pub fn parse_battery(data: &[u8]) -> Option<BatteryStatus> {
     Some(BatteryStatus { percent, charging })
 }
 
+/// Decode BATTERY_STATUS get_level reply / battery event payload:
+/// level %, next level %, status.
+pub fn parse_battery_status(data: &[u8]) -> Option<BatteryStatus> {
+    let (&percent, &code) = (data.first()?, data.get(2)?);
+    if percent > 100 {
+        return None;
+    }
+    let charging = match code {
+        0 => ChargingState::Discharging,
+        // recharging, almost full, slow recharge
+        1 | 2 | 4 => ChargingState::Charging,
+        3 => ChargingState::Full,
+        _ => ChargingState::Error,
+    };
+    Some(BatteryStatus { percent, charging })
+}
+
 /// Decode ROOT GetFeature reply; `None` when the feature is absent.
 pub fn parse_feature_index(data: &[u8]) -> Option<u8> {
     data.first().copied().filter(|&i| i != 0)
@@ -133,6 +194,14 @@ mod tests {
     fn request_encodes_short_report_with_swid() {
         assert_eq!(request(2, 0, 0, &[0x10, 0x04]), [0x10, 0x02, 0x00, 0x0A, 0x10, 0x04, 0x00]);
         assert_eq!(request(4, 8, 1, &[]), [0x10, 0x04, 0x08, 0x1A, 0, 0, 0]);
+    }
+
+    #[test]
+    fn request_long_encodes_long_report_with_swid() {
+        let req = request_long(0xFF, 0x02, 1, &[0x05]);
+        assert_eq!(req.len(), LONG_LEN);
+        assert_eq!(req[..5], [0x11, 0xFF, 0x02, 0x1A, 0x05]);
+        assert!(req[5..].iter().all(|&b| b == 0));
     }
 
     #[test]
@@ -181,6 +250,38 @@ mod tests {
     fn battery_rejects_short_or_bogus_payload() {
         assert_eq!(parse_battery(&[50, 4]), None);
         assert_eq!(parse_battery(&[101, 8, 0]), None);
+    }
+
+    #[test]
+    fn parses_battery_status_level() {
+        // probe: MX Vertical over BLE, BATTERY_STATUS get_level at index 8
+        let m = parse(&hex("11 ff 08 0a 32 14 00 00 00 00 00 00 00 00 00 00 00 00 00 00")).unwrap();
+        let Message::Reply { func: 0, data, .. } = m else { panic!("{m:?}") };
+        assert_eq!(
+            BatteryFeature::Status(8).parse(&data),
+            Some(BatteryStatus { percent: 50, charging: ChargingState::Discharging })
+        );
+    }
+
+    #[test]
+    fn battery_status_codes() {
+        assert_eq!(parse_battery_status(&[50, 20, 1]).unwrap().charging, ChargingState::Charging);
+        assert_eq!(parse_battery_status(&[90, 50, 2]).unwrap().charging, ChargingState::Charging);
+        assert_eq!(parse_battery_status(&[100, 90, 3]).unwrap().charging, ChargingState::Full);
+        assert_eq!(parse_battery_status(&[30, 20, 4]).unwrap().charging, ChargingState::Charging);
+        assert_eq!(parse_battery_status(&[30, 20, 6]).unwrap().charging, ChargingState::Error);
+    }
+
+    #[test]
+    fn battery_status_rejects_short_or_bogus_payload() {
+        assert_eq!(parse_battery_status(&[50, 20]), None);
+        assert_eq!(parse_battery_status(&[101, 20, 0]), None);
+    }
+
+    #[test]
+    fn battery_features_read_with_their_own_function() {
+        assert_eq!(BatteryFeature::Unified(8).read_func(), 1);
+        assert_eq!(BatteryFeature::Status(8).read_func(), 0);
     }
 
     #[test]

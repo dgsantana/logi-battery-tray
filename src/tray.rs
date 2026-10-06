@@ -1,12 +1,7 @@
-//! StatusNotifierItem tray rendering.
+//! Tray content shared by every platform: text, levels, snapshots.
 
-use std::sync::mpsc::Sender;
-
-use ksni::menu::{MenuItem, StandardItem};
-use ksni::{Category, ToolTip};
-
-use crate::hidpp::{BatteryStatus, ChargingState, DeviceKind};
-use crate::state::Device;
+use crate::hidpp::{BatteryStatus, ChargingState};
+use crate::state::{Device, State};
 
 pub const TITLE: &str = "Logitech batteries";
 
@@ -16,17 +11,31 @@ pub enum Cmd {
     Quit,
 }
 
-pub struct BatteryTray {
+/// What the UI shows: visible devices, the lowest battery, and whether any
+/// transport is reachable.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Snapshot {
     pub devices: Vec<Device>,
     pub lowest: Option<BatteryStatus>,
-    pub receiver_present: bool,
-    pub tx: Sender<Cmd>,
+    pub present: bool,
+}
+
+impl Snapshot {
+    pub fn of(state: &State) -> Self {
+        Self { devices: state.snapshot(), lowest: state.lowest(), present: state.any_present() }
+    }
+}
+
+/// Battery percent rounded down to tens, as icons show it.
+pub fn level(b: BatteryStatus) -> u8 {
+    b.percent / 10 * 10
 }
 
 /// Breeze status icon for the lowest battery.
+#[cfg_attr(not(target_os = "linux"), allow(dead_code))]
 pub fn icon_for(lowest: Option<BatteryStatus>) -> String {
     let Some(b) = lowest else { return "battery-missing".into() };
-    let level = b.percent / 10 * 10;
+    let level = level(b);
     match b.charging {
         ChargingState::Charging | ChargingState::Full => format!("battery-{level:03}-charging"),
         ChargingState::Discharging | ChargingState::Error => format!("battery-{level:03}"),
@@ -53,9 +62,9 @@ pub fn device_line(device: &Device) -> String {
 }
 
 /// Tooltip body.
-pub fn summary(devices: &[Device], receiver_present: bool) -> String {
-    if !receiver_present {
-        return "Receiver not found".into();
+pub fn summary(devices: &[Device], present: bool) -> String {
+    if !present {
+        return "No Logitech devices found".into();
     }
     if devices.is_empty() {
         return "No devices found".into();
@@ -63,96 +72,18 @@ pub fn summary(devices: &[Device], receiver_present: bool) -> String {
     devices.iter().map(device_line).collect::<Vec<_>>().join("\n")
 }
 
-impl ksni::Tray for BatteryTray {
-    fn id(&self) -> String {
-        env!("CARGO_PKG_NAME").into()
-    }
-
-    fn title(&self) -> String {
-        TITLE.into()
-    }
-
-    fn category(&self) -> Category {
-        Category::Hardware
-    }
-
-    fn icon_name(&self) -> String {
-        icon_for(self.lowest.filter(|_| self.receiver_present))
-    }
-
-    fn tool_tip(&self) -> ToolTip {
-        ToolTip {
-            icon_name: self.icon_name(),
-            title: TITLE.into(),
-            description: summary(&self.devices, self.receiver_present),
-            ..Default::default()
-        }
-    }
-
-    fn menu(&self) -> Vec<MenuItem<Self>> {
-        let mut items: Vec<MenuItem<Self>> = if self.devices.is_empty() || !self.receiver_present {
-            vec![StandardItem {
-                label: summary(&self.devices, self.receiver_present),
-                enabled: false,
-                ..Default::default()
-            }
-            .into()]
-        } else {
-            self.devices
-                .iter()
-                .map(|d| {
-                    StandardItem {
-                        label: device_line(d),
-                        enabled: false,
-                        icon_name: match d.kind {
-                            DeviceKind::Keyboard => "input-keyboard",
-                            DeviceKind::Mouse => "input-mouse",
-                            DeviceKind::Other => "input-gaming",
-                        }
-                        .into(),
-                        ..Default::default()
-                    }
-                    .into()
-                })
-                .collect()
-        };
-        items.push(MenuItem::Separator);
-        items.push(
-            StandardItem {
-                label: "Refresh".into(),
-                icon_name: "view-refresh".into(),
-                activate: Box::new(|t: &mut Self| {
-                    let _ = t.tx.send(Cmd::Refresh);
-                }),
-                ..Default::default()
-            }
-            .into(),
-        );
-        items.push(
-            StandardItem {
-                label: "Quit".into(),
-                icon_name: "application-exit".into(),
-                activate: Box::new(|t: &mut Self| {
-                    let _ = t.tx.send(Cmd::Quit);
-                }),
-                ..Default::default()
-            }
-            .into(),
-        );
-        items
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::hidpp::DeviceKind;
+    use crate::state::DeviceKey;
 
     fn batt(percent: u8, charging: ChargingState) -> Option<BatteryStatus> {
         Some(BatteryStatus { percent, charging })
     }
 
     fn dev(name: &str, battery: Option<BatteryStatus>, online: bool) -> Device {
-        Device { index: 2, name: name.into(), kind: DeviceKind::Mouse, battery, online }
+        Device { key: DeviceKey { transport: "t".into(), index: 2 }, name: name.into(), kind: DeviceKind::Mouse, battery, online }
     }
 
     #[test]
@@ -171,6 +102,14 @@ mod tests {
     }
 
     #[test]
+    fn level_rounds_down_to_tens() {
+        let level = |p| level(BatteryStatus { percent: p, charging: ChargingState::Discharging });
+        assert_eq!(level(95), 90);
+        assert_eq!(level(100), 100);
+        assert_eq!(level(5), 0);
+    }
+
+    #[test]
     fn icon_missing_without_reading() {
         assert_eq!(icon_for(None), "battery-missing");
     }
@@ -186,36 +125,29 @@ mod tests {
         assert_eq!(device_line(&dev("M", None, true)), "M — battery unknown");
     }
 
-    fn menu_labels(tray: &BatteryTray) -> Vec<String> {
-        use ksni::Tray;
-        tray.menu()
-            .into_iter()
-            .filter_map(|i| match i {
-                MenuItem::Standard(s) => Some(s.label),
-                _ => None,
-            })
-            .collect()
-    }
-
-    #[test]
-    fn menu_hides_stale_devices_without_receiver() {
-        let (tx, _rx) = std::sync::mpsc::channel();
-        let mut tray = BatteryTray {
-            devices: vec![dev("A", batt(50, ChargingState::Discharging), true)],
-            lowest: batt(50, ChargingState::Discharging),
-            receiver_present: true,
-            tx,
-        };
-        assert_eq!(menu_labels(&tray), ["A — 50%", "Refresh", "Quit"]);
-        tray.receiver_present = false;
-        assert_eq!(menu_labels(&tray), ["Receiver not found", "Refresh", "Quit"]);
-    }
-
     #[test]
     fn summary_lists_devices_or_explains_absence() {
         let devices = [dev("A", batt(50, ChargingState::Discharging), true), dev("B", None, true)];
         assert_eq!(summary(&devices, true), "A — 50%\nB — battery unknown");
         assert_eq!(summary(&[], true), "No devices found");
-        assert_eq!(summary(&devices, false), "Receiver not found");
+        assert_eq!(summary(&devices, false), "No Logitech devices found");
+    }
+
+    #[test]
+    fn snapshot_of_state_with_one_transport_gone() {
+        let mut state = crate::state::State::default();
+        let mut a = dev("A", batt(20, ChargingState::Discharging), true);
+        a.key.transport = "a".into();
+        let mut b = dev("B", batt(60, ChargingState::Discharging), true);
+        b.key.transport = "b".into();
+        state.upsert(a);
+        state.upsert(b);
+        state.set_present("a", false);
+        let snap = Snapshot::of(&state);
+        assert!(snap.present);
+        assert_eq!(snap.devices.iter().map(|d| d.name.as_str()).collect::<Vec<_>>(), ["B"]);
+        assert_eq!(snap.lowest, batt(60, ChargingState::Discharging));
+        state.set_present("b", false);
+        assert!(!Snapshot::of(&state).present);
     }
 }

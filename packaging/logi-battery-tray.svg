@@ -1,0 +1,12 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="64" height="64" viewBox="0 0 64 64">
+  <!-- Mouse -->
+  <rect x="8" y="4" width="30" height="48" rx="15" fill="#2e3440"/>
+  <rect x="11" y="7" width="24" height="42" rx="12" fill="#4c566a"/>
+  <line x1="23" y1="8" x2="23" y2="24" stroke="#2e3440" stroke-width="2"/>
+  <rect x="21" y="12" width="4" height="8" rx="2" fill="#d8dee9"/>
+  <!-- Battery -->
+  <rect x="34" y="34" width="26" height="26" rx="4" fill="#2e3440"/>
+  <rect x="38" y="30" width="8" height="5" rx="1.5" fill="#2e3440" transform="translate(5 0)"/>
+  <rect x="37" y="37" width="20" height="20" rx="2" fill="#eceff4"/>
+  <rect x="39" y="45" width="16" height="10" rx="1" fill="#3cc850"/>
+</svg>
