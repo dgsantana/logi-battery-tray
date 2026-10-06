@@ -18,6 +18,27 @@ the receiver's hidraw nodes; on Windows no admin rights are needed.
 
 ## Install
 
+### From a release
+
+Download the archive for your platform from
+[Releases](https://github.com/dgsantana/logi-battery-tray/releases).
+
+Windows: extract the zip and run, in PowerShell from that folder:
+
+    powershell -ExecutionPolicy Bypass -File .\install-windows.ps1                # start at login on
+    powershell -ExecutionPolicy Bypass -File .\install-windows.ps1 -NoAutostart
+    powershell -ExecutionPolicy Bypass -File .\uninstall-windows.ps1              # remove all of it
+
+This copies the exe to `%LOCALAPPDATA%\Programs\logi-battery-tray` and sets up
+the same entries as `just install` below. Run the script rather than the bare
+exe: Windows drops notifications from an app it has not registered.
+
+Linux: extract the tarball, copy `logi-battery-tray` to a directory on `PATH`
+(e.g. `~/.local/bin`), and optionally `logi-battery-tray.desktop` and
+`logi-battery-tray.svg` to the locations listed below.
+
+### From source
+
 Needs Rust and [just](https://github.com/casey/just)
 (`pacman -S just`, `winget install Casey.Just`, or `mise use -g just`).
 
@@ -26,7 +47,8 @@ Needs Rust and [just](https://github.com/casey/just)
     just uninstall                 # remove all of it
 
 Linux: installs to `~/.cargo/bin`, the desktop entry and icon under
-`~/.local/share`, and autostart under `~/.config/autostart`.
+`~/.local/share` (`applications/`, `icons/hicolor/scalable/apps/`), and
+autostart under `~/.config/autostart`.
 Windows: installs to `%USERPROFILE%\.cargo\bin`, a Start Menu shortcut, a
 `HKCU\...\Run` entry for start at login, and registers the app so
 notifications show its name and icon. Tray mode logs to

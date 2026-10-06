@@ -88,36 +88,12 @@ install autostart="true":
     if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
     $cargoHome = if ($env:CARGO_HOME) { $env:CARGO_HOME } else { Join-Path $env:USERPROFILE ".cargo" }
     $exe = Join-Path $cargoHome "bin\logi-battery-tray.exe"
-    $dataDir = Join-Path $env:LOCALAPPDATA "logi-battery-tray"
-    New-Item -ItemType Directory -Force $dataDir | Out-Null
-    Copy-Item packaging\logi-battery-tray.png $dataDir -Force
-    $lnk = Join-Path $env:APPDATA "Microsoft\Windows\Start Menu\Programs\Logitech Battery Tray.lnk"
-    $shortcut = (New-Object -ComObject WScript.Shell).CreateShortcut($lnk)
-    $shortcut.TargetPath = $exe
-    $shortcut.IconLocation = "$exe,0"
-    $shortcut.Description = "Battery levels of Logitech devices"
-    $shortcut.Save()
-    $aumid = "HKCU:\Software\Classes\AppUserModelId\dgsantana.LogiBatteryTray"
-    New-Item -Force $aumid | Out-Null
-    Set-ItemProperty $aumid -Name DisplayName -Value "Logitech Battery Tray"
-    Set-ItemProperty $aumid -Name IconUri -Value (Join-Path $dataDir "logi-battery-tray.png")
-    $run = "HKCU:\Software\Microsoft\Windows\CurrentVersion\Run"
-    if ("{{autostart}}" -eq "true") {
-        Set-ItemProperty $run -Name LogiBatteryTray -Value "`"$exe`""
-    } else {
-        Remove-ItemProperty $run -Name LogiBatteryTray -ErrorAction SilentlyContinue
-    }
-    Start-Process $exe
+    & packaging\install-windows.ps1 -Exe $exe -NoAutostart:("{{autostart}}" -ne "true")
 
 # Remove everything install put in place
 [windows]
 [script("powershell.exe", "-NoProfile", "-ExecutionPolicy", "Bypass", "-File")]
 [extension(".ps1")]
 uninstall:
-    # Wait for exit: a running exe cannot be deleted.
-    Get-Process logi-battery-tray -ErrorAction SilentlyContinue | Stop-Process -PassThru | Wait-Process
+    & packaging\uninstall-windows.ps1
     cargo uninstall logi-battery-tray
-    Remove-Item (Join-Path $env:APPDATA "Microsoft\Windows\Start Menu\Programs\Logitech Battery Tray.lnk") -ErrorAction SilentlyContinue
-    Remove-ItemProperty "HKCU:\Software\Microsoft\Windows\CurrentVersion\Run" -Name LogiBatteryTray -ErrorAction SilentlyContinue
-    Remove-Item "HKCU:\Software\Classes\AppUserModelId\dgsantana.LogiBatteryTray" -Recurse -ErrorAction SilentlyContinue
-    Remove-Item (Join-Path $env:LOCALAPPDATA "logi-battery-tray") -Recurse -ErrorAction SilentlyContinue
