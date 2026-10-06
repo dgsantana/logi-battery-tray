@@ -47,7 +47,9 @@ jobs:
       - uses: actions/upload-artifact@v4
         with:
           name: ${{ matrix.target }}
-          path: logi-battery-tray-*.*
+          path: |
+            logi-battery-tray-*.zip
+            logi-battery-tray-*.tar.gz
           if-no-files-found: error
 
   release:
